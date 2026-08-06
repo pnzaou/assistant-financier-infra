@@ -1,0 +1,132 @@
+# Valeurs par défaut — communes à tous les environnements.
+# Les surcharges par environnement vivent dans values-staging.yaml et
+# values-production.yaml.
+
+nomComplet: "" # force le nom des ressources ; sinon dérivé du nom de la release
+
+# ─── Images ──────────────────────────────────────────────────────
+# Publiées par la CI des deux repos applicatifs sur GHCR.
+#
+# `tag` vaut `develop` par défaut, mais un déploiement piloté par la CI doit
+# TOUJOURS épingler un sha : `--set serveur.image.tag=sha-<commit>`. Un tag
+# mouvant rend le déploiement non reproductible et casse le rollback.
+serveur:
+  image:
+    repository: ghcr.io/pnzaou/assistant-financier-server
+    tag: develop
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 5000
+  ressources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  autoscaling:
+    active: true
+    minReplicas: 2
+    maxReplicas: 5
+    cibleCpuPourcent: 75
+
+client:
+  image:
+    repository: ghcr.io/pnzaou/assistant-financier-client
+    tag: develop
+    pullPolicy: IfNotPresent
+  replicas: 2
+  port: 80
+  ressources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+  autoscaling:
+    active: true
+    minReplicas: 2
+    maxReplicas: 4
+    cibleCpuPourcent: 80
+
+# Secret contenant les identifiants GHCR. Inutile si les packages sont
+# publics — c'est le cas par défaut ici.
+imagePullSecrets: []
+
+# ─── Base de données ─────────────────────────────────────────────
+# Postgres DANS le cluster, pas Cloud SQL : la plus petite instance Cloud SQL
+# coûte ~10 $/mois, ce qui grignoterait les crédits pour rien sur un projet
+# d'école. À remplacer par Cloud SQL pour une vraie production — les données
+# d'un StatefulSet mono-replica ne survivent pas à la perte de son disque.
+postgres:
+  active: true
+  image: postgres:17-alpine
+  base: assistant_financier
+  utilisateur: assistant_financier
+  # Mot de passe : jamais ici. Fourni par --set ou par un Secret existant.
+  motDePasse: ""
+  secretExistant: "" # si renseigné, prime sur motDePasse
+  stockage:
+    taille: 10Gi
+    classe: standard-rwo
+  ressources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# ─── Configuration applicative ───────────────────────────────────
+config:
+  # Injectée dans /config.js du conteneur nginx au démarrage : c'est ce qui
+  # permet à la MÊME image de servir staging et production.
+  #
+  # Doit être une ORIGINE COMPLÈTE (https://hote), pas un chemin relatif : le
+  # client fait `${API_URL}/api/v1/...` et résout API_URL avec `||`, donc une
+  # chaîne vide retomberait sur localhost:5000 et "/api" donnerait
+  # "/api/api/v1/...".
+  urlApiPubliqueClient: ""
+  # Origines autorisées par le CORS de l'API (séparées par des virgules).
+  urlsClient: ""
+  nodeEnv: production
+
+# Secrets applicatifs. Aucune valeur en clair dans ce fichier : soit on
+# renseigne `secretExistant` (créé hors chart), soit on passe les valeurs
+# par --set au moment du déploiement.
+secrets:
+  secretExistant: ""
+  jwtClePrivee: ""
+  jwtClePublique: ""
+  cookieSecret: ""
+  resendApiKey: ""
+  # Uniquement quand postgres.active vaut false (base externe type Cloud SQL) :
+  # l'URL de connexion complète, que le chart ne peut alors plus fabriquer.
+  databaseUrl: ""
+
+# ─── Exposition ──────────────────────────────────────────────────
+ingress:
+  active: true
+  # `gce` = load balancer HTTP(S) natif GKE. Pas de contrôleur à installer,
+  # mais il met 5 à 10 minutes à provisionner son IP au premier déploiement.
+  className: gce
+  hote: "" # ex. assistant-financier.exemple.com
+  ipStatique: "" # nom d'une adresse IP globale réservée, si applicable
+  tls:
+    active: false
+    nomCertificatGere: "" # ManagedCertificate GKE
+
+# ─── Observabilité ───────────────────────────────────────────────
+observabilite:
+  # Crée un ServiceMonitor pour que Prometheus scrute /metrics de l'API.
+  # Exige que l'API expose bien cet endpoint (voir README, section 4i).
+  serviceMonitor:
+    active: true
+    intervalle: 30s
+    chemin: /metrics
+
+# ─── Migrations ──────────────────────────────────────────────────
+migrations:
+  # Job Helm exécuté AVANT le déploiement des pods applicatifs.
+  # Ne jamais remettre les migrations dans le CMD du conteneur : avec
+  # plusieurs replicas, chaque pod les lancerait en parallèle au démarrage.
+  active: true
+  seed: false # le seed n'a de sens qu'au tout premier déploiement

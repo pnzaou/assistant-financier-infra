@@ -1,0 +1,23 @@
+apiVersion: v2
+name: assistant-financier
+description: >-
+  Déploiement complet d'Assistant Financier : API Express, front React servi
+  par nginx, et PostgreSQL. Les images proviennent de GHCR, publiées par la CI
+  des deux repos applicatifs.
+type: application
+
+# Version du chart : à incrémenter à chaque modification des templates.
+version: 0.1.0
+
+# Version de l'application déployée par défaut. Surchargée par --set
+# image.tag=sha-<commit> lors d'un déploiement piloté par la CI.
+appVersion: "1.0.0"
+
+keywords:
+  - finance
+  - express
+  - react
+  - postgresql
+
+maintainers:
+  - name: Équipe Assistant Financier

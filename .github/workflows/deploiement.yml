@@ -1,0 +1,141 @@
+# Point 4h — Déploiement automatisé des livrables sur Kubernetes.
+#
+# Deux façons de le déclencher :
+#
+#   1. `repository_dispatch` — les CI du client et du serveur appellent ce
+#      workflow après avoir publié leur image, en passant le sha à déployer.
+#      C'est le mode nominal.
+#   2. `workflow_dispatch` — depuis l'onglet Actions, pour rejouer un
+#      déploiement ou revenir à une version antérieure.
+#
+# Le rollback ne passe pas par ce workflow : `helm rollback` est plus direct
+# (voir README).
+name: Déploiement
+
+on:
+  workflow_dispatch:
+    inputs:
+      environnement:
+        description: "Environnement cible"
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+      tag_serveur:
+        description: "Tag de l'image serveur (ex. sha-a1b2c3d). `develop` déploie le dernier build d'intégration."
+        required: true
+        default: develop
+      tag_client:
+        description: "Tag de l'image client"
+        required: true
+        default: develop
+  repository_dispatch:
+    types: [deployer]
+
+concurrency:
+  # Deux `helm upgrade` concurrents sur la même release échouent sur
+  # « another operation is in progress ». On sérialise par environnement.
+  group: deploiement-${{ github.event.inputs.environnement || github.event.client_payload.environnement || 'staging' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deployer:
+    name: Déployer
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environnement || github.event.client_payload.environnement || 'staging' }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Résolution des paramètres
+        id: params
+        run: |
+          # Les deux déclencheurs ne rangent pas leurs entrées au même endroit.
+          ENV="${{ github.event.inputs.environnement || github.event.client_payload.environnement || 'staging' }}"
+          TAG_SRV="${{ github.event.inputs.tag_serveur || github.event.client_payload.tag_serveur || 'develop' }}"
+          TAG_CLI="${{ github.event.inputs.tag_client || github.event.client_payload.tag_client || 'develop' }}"
+          {
+            echo "environnement=$ENV"
+            echo "tag_serveur=$TAG_SRV"
+            echo "tag_client=$TAG_CLI"
+          } >> "$GITHUB_OUTPUT"
+          echo "→ $ENV : serveur=$TAG_SRV client=$TAG_CLI"
+
+      - name: Authentification GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Outils gcloud + plugin d'authentification GKE
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          # Sans ce plugin, kubectl échoue depuis la 1.26 sur
+          # « no Auth Provider found for name gcp ».
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Accès au cluster
+        run: |
+          gcloud container clusters get-credentials "${{ secrets.NOM_CLUSTER }}" \
+            --zone "${{ secrets.ZONE_GCP }}" \
+            --project "${{ secrets.PROJET_GCP }}"
+
+      - name: Installation de Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Déploiement
+        env:
+          ENVIRONNEMENT: ${{ steps.params.outputs.environnement }}
+          TAG_SERVEUR: ${{ steps.params.outputs.tag_serveur }}
+          TAG_CLIENT: ${{ steps.params.outputs.tag_client }}
+        run: |
+          helm upgrade --install assistant-financier ./helm/assistant-financier \
+            --namespace "$ENVIRONNEMENT" \
+            --values "./helm/assistant-financier/values-$ENVIRONNEMENT.yaml" \
+            --set serveur.image.tag="$TAG_SERVEUR" \
+            --set client.image.tag="$TAG_CLIENT" \
+            --set secrets.jwtClePrivee="${{ secrets.JWT_CLE_PRIVEE }}" \
+            --set secrets.jwtClePublique="${{ secrets.JWT_CLE_PUBLIQUE }}" \
+            --set secrets.cookieSecret="${{ secrets.COOKIE_SECRET }}" \
+            --set secrets.resendApiKey="${{ secrets.RESEND_API_KEY }}" \
+            --set postgres.motDePasse="${{ secrets.POSTGRES_MOT_DE_PASSE }}" \
+            --atomic \
+            --wait \
+            --timeout 10m
+          # --atomic : en cas d'échec, Helm restaure automatiquement la
+          # version précédente. Sans lui, un déploiement raté laisserait la
+          # release à moitié appliquée.
+
+      - name: État du déploiement
+        if: always()
+        env:
+          ENVIRONNEMENT: ${{ steps.params.outputs.environnement }}
+        run: |
+          {
+            echo "## Déploiement — $ENVIRONNEMENT"
+            echo '```'
+            helm status assistant-financier -n "$ENVIRONNEMENT" 2>&1 | head -30
+            echo '```'
+            echo '### Pods'
+            echo '```'
+            kubectl get pods -n "$ENVIRONNEMENT" -o wide 2>&1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Journaux du Job de migration en cas d'échec
+        if: failure()
+        env:
+          ENVIRONNEMENT: ${{ steps.params.outputs.environnement }}
+        run: |
+          # Cause d'échec la plus fréquente : une migration Prisma qui casse.
+          kubectl logs -n "$ENVIRONNEMENT" \
+            -l app.kubernetes.io/component=migration \
+            --tail=100 --all-containers 2>&1 || echo "Aucun Job de migration trouvé."

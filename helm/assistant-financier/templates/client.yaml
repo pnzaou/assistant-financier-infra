@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "af.nomComplet" . }}-client
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: client
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "af.selecteurs" . | nindent 4 }}
+    app.kubernetes.io/component: client
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "af.nomComplet" . }}-client
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: client
+spec:
+  {{- if not .Values.client.autoscaling.active }}
+  replicas: {{ .Values.client.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "af.selecteurs" . | nindent 6 }}
+      app.kubernetes.io/component: client
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "af.selecteurs" . | nindent 8 }}
+        app.kubernetes.io/component: client
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: client
+          image: "{{ .Values.client.image.repository }}:{{ .Values.client.image.tag }}"
+          imagePullPolicy: {{ .Values.client.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          env:
+            # C'est TOUTE la raison d'être du passage de VITE_API_URL en
+            # runtime : la même image sert staging et production, seule cette
+            # variable change. Elle est lue par config-runtime.sh au démarrage
+            # du conteneur, qui écrit /config.js.
+            - name: API_URL
+              value: {{ required "config.urlApiPubliqueClient est obligatoire : sans elle le front appellerait localhost:5000 depuis le navigateur." .Values.config.urlApiPubliqueClient | quote }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.client.ressources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              # nginx doit pouvoir écouter sur le port 80 (< 1024) et
+              # réécrire /config.js au démarrage : on ne peut pas tout retirer.
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "af.selecteurs" . | nindent 14 }}
+              app.kubernetes.io/component: client
+---
+{{- if .Values.client.autoscaling.active }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "af.nomComplet" . }}-client
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: client
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "af.nomComplet" . }}-client
+  minReplicas: {{ .Values.client.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.client.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.client.autoscaling.cibleCpuPourcent }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+{{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "af.nomComplet" . }}-client
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: client
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "af.selecteurs" . | nindent 6 }}
+      app.kubernetes.io/component: client

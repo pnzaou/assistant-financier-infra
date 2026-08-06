@@ -1,0 +1,60 @@
+# ─── Terraform ───────────────────────────────────────────────────
+# Répertoire des providers : plusieurs centaines de Mo, retéléchargeables.
+.terraform/
+.terraform.lock.hcl.bak
+
+# L'état ne doit JAMAIS être commité : il contient en clair les valeurs des
+# variables sensibles (mot de passe Grafana, certificats du cluster) et sert
+# de source de vérité. Il vit dans le bucket GCS déclaré dans versions.tf.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Contient l'identifiant du projet GCP.
+terraform.tfvars
+*.auto.tfvars
+!terraform.tfvars.example
+
+# Plans binaires : peuvent contenir des valeurs sensibles.
+*.tfplan
+plan.out
+
+# Fichiers de surcharge locaux.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+crash.log
+crash.*.log
+
+# ─── Helm ────────────────────────────────────────────────────────
+# Dépendances vendorées et paquets construits.
+charts/*.tgz
+**/charts/*.tgz
+*.tgz
+
+# Valeurs locales contenant des secrets.
+#
+# Règles volontairement étroites : un motif large comme `secrets*.yaml`
+# attraperait aussi helm/assistant-financier/templates/secrets.yaml, qui EST
+# le template du chart et doit être versionné. La négation `!templates/...`
+# ne le rattraperait pas — un motif contenant une barre oblique est ancré à
+# l'emplacement du .gitignore, donc à la racine du dépôt.
+values-local.yaml
+values-secrets.yaml
+*.local.yaml
+
+# ─── Identifiants ────────────────────────────────────────────────
+# Clés de compte de service GCP : à ne jamais faire entrer dans le dépôt.
+*.json
+!package.json
+!.terraform.lock.hcl
+kubeconfig
+.kube/
+*.pem
+*.key
+
+.env
+.env.*
+!.env.example

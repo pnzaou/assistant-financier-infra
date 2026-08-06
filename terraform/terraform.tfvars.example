@@ -1,0 +1,37 @@
+# Copier vers terraform.tfvars puis ajuster.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars est ignoré par git : il contient l'identifiant de ton
+# projet GCP, qui n'a rien à faire dans un dépôt public.
+
+projet_gcp = "assistant-financier-XXXXXX"
+
+# europe-west1 (Belgique) : la moins chère des régions européennes.
+region = "europe-west1"
+zone   = "europe-west1-b"
+
+nom_cluster  = "assistant-financier"
+type_machine = "e2-medium"
+
+nb_noeuds_min = 2
+nb_noeuds_max = 4
+
+# false = VM classiques, ~3x plus cher mais jamais préemptées.
+noeuds_spot = true
+
+activer_observabilite = true
+
+# NE PAS mettre le mot de passe Grafana ici. Passer par l'environnement :
+#   export TF_VAR_mot_de_passe_grafana='...'      (bash)
+#   $env:TF_VAR_mot_de_passe_grafana = '...'      (PowerShell)
+
+# Restreindre dès que possible à l'IP de sortie de l'équipe :
+#   reseaux_autorises_api = [
+#     { cidr = "41.82.x.x/32", description = "Bureau" },
+#   ]
+
+etiquettes = {
+  projet      = "assistant-financier"
+  gere_par    = "terraform"
+  environment = "staging"
+}

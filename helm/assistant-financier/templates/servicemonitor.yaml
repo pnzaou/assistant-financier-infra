@@ -1,0 +1,34 @@
+{{- if .Values.observabilite.serviceMonitor.active }}
+{{/*
+  Point 4i — branchement de l'API sur Prometheus.
+
+  Un ServiceMonitor est un objet de l'opérateur Prometheus : il lui indique
+  quel Service scruter et sur quel chemin. Il n'existe que si l'opérateur
+  (kube-prometheus-stack) est installé — d'où le drapeau dans values.yaml.
+
+  PRÉREQUIS CÔTÉ APPLICATION : l'API doit exposer /metrics au format
+  Prometheus. Ce n'est pas encore le cas — voir README, section « Ce qui
+  reste à faire côté serveur ». Tant que l'endpoint n'existe pas, la cible
+  apparaîtra « down » dans Prometheus.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "af.nomComplet" . }}-serveur
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serveur
+spec:
+  selector:
+    matchLabels:
+      {{- include "af.selecteurs" . | nindent 6 }}
+      app.kubernetes.io/component: serveur
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: {{ .Values.observabilite.serviceMonitor.chemin }}
+      interval: {{ .Values.observabilite.serviceMonitor.intervalle }}
+      scheme: http
+{{- end }}

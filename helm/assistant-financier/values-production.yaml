@@ -1,0 +1,65 @@
+# Surcharges de l'environnement de PRODUCTION (namespace `production`).
+#
+#   helm upgrade --install assistant-financier ./helm/assistant-financier \
+#     --namespace production \
+#     --values ./helm/assistant-financier/values-production.yaml \
+#     --set serveur.image.tag=sha-<commit> \
+#     --set client.image.tag=sha-<commit>
+
+serveur:
+  image:
+    tag: latest
+  autoscaling:
+    active: true
+    minReplicas: 2
+    maxReplicas: 5
+  ressources:
+    requests:
+      cpu: 200m
+      memory: 384Mi
+    limits:
+      memory: 768Mi
+
+client:
+  image:
+    tag: latest
+  autoscaling:
+    active: true
+    minReplicas: 2
+    maxReplicas: 4
+
+postgres:
+  # ATTENTION : laissé à `true` pour que le chart reste déployable tel quel,
+  # mais un StatefulSet mono-replica SANS SAUVEGARDE n'a rien à faire en
+  # production. Basculer sur Cloud SQL dès que le projet sort de la démo :
+  #   postgres.active = false
+  #   + un Secret contenant l'URL de connexion Cloud SQL
+  active: true
+  stockage:
+    taille: 20Gi
+  ressources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+config:
+  nodeEnv: production
+  # Origine complète — voir le commentaire de values.yaml.
+  urlApiPubliqueClient: "https://assistant-financier.exemple.com"
+  urlsClient: "https://assistant-financier.exemple.com"
+
+ingress:
+  active: true
+  className: gce
+  hote: "assistant-financier.exemple.com"
+  ipStatique: "assistant-financier-ip"
+  tls:
+    active: true
+    nomCertificatGere: "assistant-financier-cert"
+
+migrations:
+  active: true
+  # Jamais en production : le seed réécrirait des données de référence.
+  seed: false

@@ -1,0 +1,61 @@
+# Surcharges de l'environnement de STAGING (namespace `staging`).
+#
+#   helm upgrade --install assistant-financier ./helm/assistant-financier \
+#     --namespace staging \
+#     --values ./helm/assistant-financier/values-staging.yaml \
+#     --set serveur.image.tag=sha-<commit> \
+#     --set client.image.tag=sha-<commit>
+
+serveur:
+  image:
+    tag: develop
+  autoscaling:
+    active: true
+    minReplicas: 1
+    maxReplicas: 3
+  ressources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+client:
+  image:
+    tag: develop
+  autoscaling:
+    active: true
+    minReplicas: 1
+    maxReplicas: 2
+
+postgres:
+  active: true
+  stockage:
+    taille: 5Gi
+
+config:
+  nodeEnv: production
+  # ORIGINE COMPLÈTE, jamais un chemin relatif.
+  #
+  # Le client construit ses appels ainsi : `${API_URL}/api/v1/...`, et
+  # src/lib/config.ts résout API_URL avec `||`. Une chaîne vide serait donc
+  # traitée comme « non défini » et retomberait sur http://localhost:5000 ;
+  # une valeur "/api" produirait "/api/api/v1/...". Dans les deux cas le
+  # front n'atteindrait jamais l'API.
+  #
+  # À remplacer par le nom d'hôte réel une fois l'Ingress provisionné (son IP
+  # met 5 à 10 minutes à apparaître au premier déploiement).
+  urlApiPubliqueClient: "https://staging.assistant-financier.exemple.com"
+  urlsClient: "https://staging.assistant-financier.exemple.com"
+
+ingress:
+  active: true
+  className: gce
+  hote: ""
+  tls:
+    active: false
+
+migrations:
+  active: true
+  # Vrai uniquement au premier déploiement d'un environnement neuf.
+  seed: true

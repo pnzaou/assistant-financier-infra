@@ -1,0 +1,13 @@
+# Fins de ligne normalisées en LF, dans le dépôt ET dans la copie de travail.
+#
+# Sans ça, `core.autocrlf=true` (le défaut de Git for Windows) sort des CRLF.
+# Ici l'enjeu n'est pas cosmétique : les templates Helm et les manifests
+# Kubernetes sont consommés par des outils Linux, et `terraform fmt -check`
+# en CI échouerait sur des fichiers pourtant identiques.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.tf text eol=lf
+*.tpl text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf

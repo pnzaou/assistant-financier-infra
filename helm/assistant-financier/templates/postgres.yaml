@@ -1,0 +1,106 @@
+{{- if .Values.postgres.active }}
+{{/*
+  PostgreSQL en StatefulSet, mono-replica.
+
+  À n'utiliser que pour staging et pour la démo : un seul replica, pas de
+  réplication, pas de sauvegarde. Si le disque est perdu, les données le sont
+  aussi. Pour une vraie production, remplacer par Cloud SQL (ou l'opérateur
+  CloudNativePG) et mettre postgres.active à false.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "af.hotePostgres" . }}
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  # Service « headless » : chaque pod du StatefulSet obtient une entrée DNS
+  # stable, ce dont il a besoin pour garder son identité.
+  clusterIP: None
+  ports:
+    - port: 5432
+      targetPort: postgres
+      name: postgres
+  selector:
+    {{- include "af.selecteurs" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "af.hotePostgres" . }}
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ include "af.hotePostgres" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "af.selecteurs" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "af.selecteurs" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      securityContext:
+        # UID de l'utilisateur postgres dans l'image alpine. fsGroup fait
+        # appartenir le volume à ce groupe, sinon le conteneur ne peut pas
+        # écrire dans son propre répertoire de données.
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.utilisateur | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.base | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "af.nomSecretPostgres" . }}
+                  key: motDePasse
+            # L'image Postgres refuse d'initialiser dans un répertoire non
+            # vide : or un volume GCE monté contient déjà lost+found.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: donnees
+              mountPath: /var/lib/postgresql/data
+          # `pg_isready` seul répond OK dès l'écoute du socket, avant que la
+          # base ne soit interrogeable : on exécute une vraie requête.
+          readinessProbe:
+            exec:
+              command:
+                ["sh", "-c", "pg_isready -U {{ .Values.postgres.utilisateur }} -d {{ .Values.postgres.base }}"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                ["sh", "-c", "pg_isready -U {{ .Values.postgres.utilisateur }} -d {{ .Values.postgres.base }}"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.postgres.ressources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: donnees
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.postgres.stockage.classe }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.stockage.taille }}
+{{- end }}

@@ -1,0 +1,161 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "af.nomComplet" . }}-serveur
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serveur
+  annotations:
+    # Demande à GKE de créer un NEG : le load balancer envoie alors le trafic
+    # directement aux pods, sans rebond par kube-proxy. Requis par l'Ingress GCE.
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.serveur.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "af.selecteurs" . | nindent 4 }}
+    app.kubernetes.io/component: serveur
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "af.nomComplet" . }}-serveur
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serveur
+spec:
+  {{- if not .Values.serveur.autoscaling.active }}
+  replicas: {{ .Values.serveur.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "af.selecteurs" . | nindent 6 }}
+      app.kubernetes.io/component: serveur
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      # Aucun pod retiré avant qu'un nouveau ne soit prêt : le déploiement se
+      # fait sans interruption de service.
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "af.selecteurs" . | nindent 8 }}
+        app.kubernetes.io/component: serveur
+      annotations:
+        # Force le redémarrage des pods quand un secret change : sans ça, une
+        # rotation de clé JWT ne serait prise en compte qu'au prochain
+        # redéploiement fortuit.
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: serveur
+          image: "{{ .Values.serveur.image.repository }}:{{ .Values.serveur.image.tag }}"
+          imagePullPolicy: {{ .Values.serveur.image.pullPolicy }}
+          # L'image lance par défaut migrations + seed + serveur. Ici les
+          # migrations sont déjà passées par le Job : on ne démarre QUE le
+          # serveur, sinon chaque replica les rejouerait.
+          command: ["node", "dist/src/index.js"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.serveur.port }}
+              protocol: TCP
+          env:
+            {{- include "af.envServeur" . | nindent 12 }}
+          # `startupProbe` couvre le démarrage lent (connexion Prisma, pool
+          # PG) ; tant qu'elle n'a pas réussi, liveness et readiness sont
+          # suspendues. Sans elle, une liveness trop stricte tuerait le pod
+          # en boucle avant qu'il n'ait fini de démarrer.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.serveur.ressources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      # Sur des nœuds Spot, répartir les replicas sur des nœuds différents :
+      # une préemption ne doit pas emporter toute l'API d'un coup.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "af.selecteurs" . | nindent 14 }}
+              app.kubernetes.io/component: serveur
+---
+{{- if .Values.serveur.autoscaling.active }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "af.nomComplet" . }}-serveur
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serveur
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "af.nomComplet" . }}-serveur
+  minReplicas: {{ .Values.serveur.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.serveur.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.serveur.autoscaling.cibleCpuPourcent }}
+  behavior:
+    scaleDown:
+      # Cinq minutes d'observation avant de réduire : évite le yo-yo sur un
+      # trafic en dents de scie.
+      stabilizationWindowSeconds: 300
+{{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "af.nomComplet" . }}-serveur
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: serveur
+spec:
+  # Garantit qu'une opération volontaire (drain de nœud, mise à jour GKE) ne
+  # supprime jamais le dernier pod disponible.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "af.selecteurs" . | nindent 6 }}
+      app.kubernetes.io/component: serveur

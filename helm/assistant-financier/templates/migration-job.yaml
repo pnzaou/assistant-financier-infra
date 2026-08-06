@@ -1,0 +1,101 @@
+{{- if .Values.migrations.active }}
+{{/*
+  Point 4h — Migrations Prisma.
+
+  C'est LE correctif structurel du passage à Kubernetes. L'image serveur
+  lançait jusqu'ici ses migrations depuis son CMD :
+
+      npx prisma migrate deploy && node dist/prisma/seed.js && node dist/src/index.js
+
+  Avec un seul conteneur c'est acceptable. Avec `replicas: 2`, les deux pods
+  démarrent ensemble et appliquent les migrations en parallèle sur la même
+  base. Prisma pose bien un verrou consultatif qui sérialise l'opération,
+  mais on se retrouve quand même avec un pod qui attend l'autre à chaque
+  démarrage, un rolling update qui traîne, et surtout un seed rejoué à
+  chaque montée en charge.
+
+  Ici : un Job unique, en hook `pre-install,pre-upgrade`, donc terminé AVANT
+  que le moindre pod applicatif ne démarre. Si la migration échoue, Helm
+  interrompt le déploiement et l'ancienne version continue de tourner.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "af.nomComplet" . }}-migration
+  labels:
+    {{- include "af.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    # Le Job précédent est supprimé avant d'en créer un nouveau : sans ça, un
+    # deuxième `helm upgrade` échouerait sur « job already exists », les Jobs
+    # étant immuables. On ne supprime PAS après succès : les logs d'une
+    # migration sont ce qu'on veut relire quand un déploiement s'est mal passé.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  # Une migration qui échoue échoue de façon déterministe : la rejouer trois
+  # fois ne ferait que retarder le diagnostic.
+  backoffLimit: 1
+  # Garde-fou : sans lui, une migration bloquée sur un verrou retiendrait
+  # indéfiniment le déploiement.
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "af.selecteurs" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- if .Values.postgres.active }}
+      # Postgres est un StatefulSet qui met quelques secondes à accepter les
+      # connexions. Sans cette attente, le Job échouerait à la première
+      # installation, avant même que la base ne soit prête.
+      initContainers:
+        - name: attendre-postgres
+          image: {{ .Values.postgres.image }}
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "af.hotePostgres" . }} -p 5432 -U {{ .Values.postgres.utilisateur }}; do
+                echo "En attente de PostgreSQL…"
+                sleep 2
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+      {{- end }}
+
+      containers:
+        - name: migration
+          image: "{{ .Values.serveur.image.repository }}:{{ .Values.serveur.image.tag }}"
+          imagePullPolicy: {{ .Values.serveur.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "→ Application des migrations"
+              npx prisma migrate deploy
+              {{- if .Values.migrations.seed }}
+              echo "→ Seed (idempotent)"
+              node dist/prisma/seed.js
+              {{- end }}
+              echo "✓ Base à jour"
+          env:
+            {{- include "af.envServeur" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+{{- end }}

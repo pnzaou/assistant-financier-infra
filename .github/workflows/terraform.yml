@@ -1,0 +1,188 @@
+# Pipeline de l'infrastructure.
+#
+#   pull request → fmt, validate, lint du chart, puis `plan` publié en
+#                  commentaire de la PR : on relit ce qui va changer AVANT
+#                  de toucher au cluster.
+#   push sur main → `apply`, derrière un environnement GitHub protégé qui
+#                   impose une approbation manuelle.
+#
+# Un `apply` automatique sans relecture est le meilleur moyen de détruire un
+# cluster sur une faute de frappe : d'où la séparation stricte plan/apply.
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["terraform/**", "helm/**", ".github/workflows/terraform.yml"]
+  push:
+    branches: [main]
+    paths: ["terraform/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch:
+
+concurrency:
+  # Jamais deux `apply` simultanés : ils se disputeraient le verrou de l'état
+  # et laisseraient l'infrastructure dans un état incohérent.
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.9.8"
+  REPERTOIRE_TF: terraform
+
+jobs:
+  validation:
+    name: Format, validation & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Format
+        working-directory: ${{ env.REPERTOIRE_TF }}
+        run: terraform fmt -check -recursive -diff
+
+      # `-backend=false` : la validation syntaxique n'a pas besoin de l'état
+      # distant, donc pas besoin d'identifiants GCP non plus.
+      - name: Initialisation (sans backend)
+        working-directory: ${{ env.REPERTOIRE_TF }}
+        run: terraform init -backend=false -input=false
+
+      - name: Validation
+        working-directory: ${{ env.REPERTOIRE_TF }}
+        run: terraform validate
+
+      - name: Installation de Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Lint du chart
+        run: |
+          for env in staging production; do
+            echo "── $env ──"
+            helm lint helm/assistant-financier \
+              --values helm/assistant-financier/values-$env.yaml \
+              --set secrets.jwtClePrivee=factice \
+              --set secrets.jwtClePublique=factice \
+              --set secrets.cookieSecret=factice \
+              --set postgres.motDePasse=factice
+          done
+
+      # Rend concret ce que le chart produit : une erreur d'indentation
+      # invisible au lint apparaît ici.
+      - name: Rendu des manifests
+        run: |
+          helm template assistant-financier helm/assistant-financier \
+            --namespace staging \
+            --values helm/assistant-financier/values-staging.yaml \
+            --set secrets.jwtClePrivee=factice \
+            --set secrets.jwtClePublique=factice \
+            --set secrets.cookieSecret=factice \
+            --set postgres.motDePasse=factice > /tmp/manifests.yaml
+          echo "$(grep -c '^kind:' /tmp/manifests.yaml) ressources rendues"
+
+      - name: Conservation des manifests rendus
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifests-staging
+          path: /tmp/manifests.yaml
+          retention-days: 7
+
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    needs: validation
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Workload Identity Federation : GitHub échange le jeton OIDC du job
+      # contre des identifiants GCP éphémères. Aucune clé de compte de service
+      # à stocker en secret — c'est ce qu'on veut, une clé JSON qui fuite
+      # donne un accès permanent au projet.
+      - name: Authentification GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Initialisation
+        working-directory: ${{ env.REPERTOIRE_TF }}
+        run: terraform init -input=false -backend-config="bucket=${{ secrets.BUCKET_ETAT_TF }}"
+
+      - name: Plan
+        id: plan
+        working-directory: ${{ env.REPERTOIRE_TF }}
+        env:
+          TF_VAR_projet_gcp: ${{ secrets.PROJET_GCP }}
+          TF_VAR_mot_de_passe_grafana: ${{ secrets.MOT_DE_PASSE_GRAFANA }}
+        run: |
+          terraform plan -input=false -no-color -out=plan.tfplan | tee /tmp/plan.txt
+          echo "resume=$(grep -E '^Plan:|No changes' /tmp/plan.txt | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Publication du plan en commentaire
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('/tmp/plan.txt', 'utf8');
+            // Un commentaire GitHub est plafonné à 65 536 caractères.
+            const MAX = 60000;
+            if (plan.length > MAX) {
+              plan = plan.slice(0, MAX) + '\n\n… plan tronqué, voir les logs du job.';
+            }
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### Plan Terraform\n\n\`${{ steps.plan.outputs.resume }}\`\n\n<details><summary>Détail</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`
+            });
+
+  apply:
+    name: Apply
+    runs-on: ubuntu-latest
+    needs: validation
+    if: github.event_name != 'pull_request'
+    # Environnement GitHub protégé : configurer une règle d'approbation dans
+    # Settings → Environments → infrastructure. Sans ça, l'apply part seul.
+    environment: infrastructure
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authentification GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Initialisation
+        working-directory: ${{ env.REPERTOIRE_TF }}
+        run: terraform init -input=false -backend-config="bucket=${{ secrets.BUCKET_ETAT_TF }}"
+
+      - name: Apply
+        working-directory: ${{ env.REPERTOIRE_TF }}
+        env:
+          TF_VAR_projet_gcp: ${{ secrets.PROJET_GCP }}
+          TF_VAR_mot_de_passe_grafana: ${{ secrets.MOT_DE_PASSE_GRAFANA }}
+        run: terraform apply -input=false -auto-approve

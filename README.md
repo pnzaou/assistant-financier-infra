@@ -61,12 +61,12 @@ Sur `westeurope`, avec les valeurs par défaut :
 |---|---|
 | Control plane AKS (tier Free) | **0 $** |
 | 1 × Standard_B2s système (Regular — imposé par Azure) | ~30 $ |
-| 1 × Standard_B2s applicatif (Spot) | ~6 $ |
+| 1 × Standard_B2s applicatif (Regular — Spot indisponible sur l'essai) | ~30 $ |
 | Disques OS éphémères | 0 $ |
 | Volumes persistants (Prometheus, Grafana, Alertmanager, Postgres) | 2–3 $ |
 | Load balancer Standard + IP publique | ~22 $ |
 | Log Analytics (ingestion des journaux) | 5–15 $ |
-| **Total** | **~65–75 $** |
+| **Total** | **~85–95 $** |
 
 Les 200 $ de l'essai gratuit couvrent donc confortablement les 30 jours, mais
 **pas beaucoup plus**. Deux leviers si ça devient juste :
@@ -80,6 +80,30 @@ Les 200 $ de l'essai gratuit couvrent donc confortablement les 30 jours, mais
 > nuit, et l'essai Azure ne dure que 30 jours.
 
 ---
+
+## Deux limites de l'essai gratuit à connaître avant de commencer
+
+**Les VM Spot ne sont pas disponibles.** Azure les refuse aux abonnements Free
+Trial, Azure for Students et MSDN. Il faut `noeuds_spot = false`, sinon la
+création du pool applicatif échoue après plusieurs minutes d'attente, sur une
+erreur peu explicite (`SkuNotAvailable`, `OperationNotAllowed`). Conséquence
+directe sur la facture : le nœud applicatif passe de ~6 $ à ~30 $/mois.
+
+**Le quota est de 4 vCPU par région.** Deux `Standard_B2s` (2 vCPU chacune) le
+consomment exactement — d'où `nb_noeuds_app_max = 1`. Un autoscaling au-delà
+échouerait silencieusement, l'autoscaler ne pouvant pas provisionner. À
+vérifier avant l'apply :
+
+```bash
+az vm list-usage --location westeurope -o table | grep -i "Total Regional vCPUs"
+```
+
+Une demande d'augmentation de quota est possible depuis le portail
+(Aide + support → Nouvelle demande de support → Limites de service), mais elle
+est souvent refusée sur un abonnement d'essai.
+
+Coût réel dans cette configuration : **~85–95 $/mois**. Les 200 $ couvrent
+donc les 30 jours de l'essai, sans marge pour un oubli.
 
 ## Amorçage (une seule fois)
 

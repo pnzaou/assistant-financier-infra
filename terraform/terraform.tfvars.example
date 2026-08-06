@@ -23,13 +23,24 @@ version_kubernetes = null
 taille_noeud_systeme = "Standard_B2s"
 nb_noeuds_systeme    = 1
 
-# ─── Pool applicatif (Spot)
+# ─── Pool applicatif
 taille_noeud_app  = "Standard_B2s"
 nb_noeuds_app_min = 1
-nb_noeuds_app_max = 3
+nb_noeuds_app_max = 1
 
-# false = VM classiques, ~5x plus cher mais jamais évincées.
-noeuds_spot = true
+# ATTENTION — false est OBLIGATOIRE sur un abonnement d'essai gratuit.
+#
+# Azure ne propose pas les VM Spot aux abonnements Free Trial, Azure for
+# Students ni MSDN. La création du pool échouerait avec une erreur de type
+# « SkuNotAvailable » ou « OperationNotAllowed », après plusieurs minutes
+# d'attente. Repasser à true seulement après conversion en paiement à l'usage.
+noeuds_spot = false
+
+# ─── Quota
+# Un abonnement d'essai est plafonné à 4 vCPU par région. Deux Standard_B2s
+# (2 vCPU chacune) consomment donc EXACTEMENT le quota : d'où
+# nb_noeuds_app_max = 1 ci-dessus. Vérifier avant l'apply :
+#   az vm list-usage --location westeurope -o table | grep -i "Total Regional vCPUs"
 
 activer_observabilite = true
 

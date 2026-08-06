@@ -60,6 +60,25 @@ Nom du Secret applicatif : celui fourni par l'utilisateur, sinon celui du chart.
 {{- end -}}
 
 {{/*
+Contraintes d'ordonnancement, communes à tous les pods du chart.
+
+Sur AKS, le pool applicatif est en priorité Spot et porte donc le taint
+`kubernetes.azure.com/scalesetpriority=spot:NoSchedule`, tandis que le pool
+système porte `CriticalAddonsOnly`. Sans tolérer le premier, aucun pod de ce
+chart ne trouverait de nœud : ils resteraient tous indéfiniment en Pending.
+*/}}
+{{- define "af.ordonnancement" -}}
+{{- with .Values.tolerations }}
+tolerations:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .Values.nodeSelector }}
+nodeSelector:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Bloc d'environnement partagé par l'API et par le Job de migration : les deux
 doivent voir exactement la même base et les mêmes clés, sinon une migration
 s'appliquerait ailleurs que là où tourne l'application.

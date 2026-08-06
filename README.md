@@ -1,11 +1,11 @@
 # Assistant Financier — Infrastructure
 
-Provisionnement GCP, déploiement Kubernetes et observabilité.
+Provisionnement Azure, déploiement Kubernetes et observabilité.
 Couvre les points **4g, 4h et 4i** du TODO.
 
 | Dossier | Contenu |
 |---|---|
-| `terraform/` | VPC, cluster GKE, namespaces, stack Prometheus/Grafana |
+| `terraform/` | Groupe de ressources, VNet, cluster AKS, namespaces, stack Prometheus/Grafana |
 | `helm/assistant-financier/` | Chart de l'application (API, front, PostgreSQL) |
 | `.github/workflows/` | `terraform.yml` (plan/apply), `deploiement.yml` (helm upgrade) |
 
@@ -17,87 +17,117 @@ Les images déployées viennent de GHCR, publiées par la CI des repos
 
 ## Choix structurants
 
-**GKE Standard zonal, pas Autopilot ni régional.** Autopilot facture à la
-ressource demandée et refuse les DaemonSets privilégiés — dont `node-exporter`,
-nécessaire à l'observabilité. Un cluster régional triple le control plane et
-les nœuds. Le zonal Standard est le seul à tenir dans les crédits gratuits.
+**AKS avec `sku_tier = "Free"`.** Contrairement à EKS (0,10 $/h) et GKE
+(0,10 $/h au-delà du premier cluster zonal), le control plane AKS est gratuit.
+On ne paie que les nœuds. En contrepartie : aucun SLA sur la disponibilité de
+l'API Kubernetes, sans importance ici.
 
-**Nœuds Spot.** 60 à 91 % moins chers, préemptibles avec 30 s de préavis. Les
-Deployments ont plusieurs replicas, des `topologySpreadConstraints` et un
-PodDisruptionBudget : une préemption ne coupe pas le service. À passer à
-`noeuds_spot = false` pour une vraie production.
+**Deux pools de nœuds, et ce n'est pas cosmétique.** Azure **refuse** qu'un
+pool système soit en priorité Spot. Le pool par défaut héberge les composants
+système (CoreDNS, metrics-server) et reste en Regular ; les charges
+applicatives vont sur un pool Spot séparé, jusqu'à 90 % moins cher.
 
-**PostgreSQL dans le cluster.** La plus petite instance Cloud SQL coûte
-~10 $/mois. Un StatefulSet mono-replica suffit pour staging et la démo — mais
+**Conséquence directe : les tolérations sont obligatoires.** Le pool système
+porte le taint `CriticalAddonsOnly=true:NoSchedule`, le pool applicatif
+`kubernetes.azure.com/scalesetpriority=spot:NoSchedule`. Un pod qui ne tolère
+ni l'un ni l'autre reste **indéfiniment en Pending** — c'est l'erreur la plus
+fréquente sur un cluster AKS mixte. Le chart et la stack d'observabilité
+déclarent les tolérations qu'il faut.
+
+**Réseau en mode overlay.** Les pods reçoivent leurs IP d'un espace privé
+distinct du VNet. Sans ça, chaque pod consommerait une adresse du sous-réseau
+et un `/20` serait épuisé bien avant la limite de nœuds.
+
+**Disques OS éphémères.** Inclus dans le prix de la VM, là où un disque managé
+est facturé à part. Le contenu est perdu si le nœud est recréé — sans
+importance pour un disque système.
+
+**PostgreSQL dans le cluster.** Azure Database for PostgreSQL démarre autour de
+15 $/mois. Un StatefulSet mono-replica suffit pour staging et la démo, mais
 **sans sauvegarde ni réplication** : si le disque est perdu, les données le
-sont. Pour la production, basculer sur Cloud SQL (`postgres.active = false` et
-`secrets.databaseUrl` renseigné).
+sont. Pour une vraie production, basculer sur le service managé
+(`postgres.active = false` et `secrets.databaseUrl` renseigné).
 
-**Images sur GHCR, pas Artifact Registry.** Gratuit et illimité sur dépôt
-public, déjà lié à GitHub, aucun secret supplémentaire à gérer.
+**Images sur GHCR, pas Azure Container Registry.** Gratuit et illimité sur
+dépôt public, déjà lié à GitHub, aucun secret supplémentaire à gérer.
 
 ---
 
 ## Coût estimé
 
-Sur `europe-west1`, avec les valeurs par défaut :
+Sur `westeurope`, avec les valeurs par défaut :
 
 | Poste | ~ /mois |
 |---|---|
-| Control plane GKE (1er cluster zonal) | **0 $** — offert par compte de facturation |
-| 2 × e2-medium Spot | 10–16 $ |
-| Disques des nœuds (2 × 30 Go pd-standard) | 2–3 $ |
+| Control plane AKS (tier Free) | **0 $** |
+| 1 × Standard_B2s système (Regular — imposé par Azure) | ~30 $ |
+| 1 × Standard_B2s applicatif (Spot) | ~6 $ |
+| Disques OS éphémères | 0 $ |
 | Volumes persistants (Prometheus, Grafana, Alertmanager, Postgres) | 2–3 $ |
-| Load balancer HTTP(S) de l'Ingress | **~18 $** |
-| **Total** | **~35–45 $** |
+| Load balancer Standard + IP publique | ~22 $ |
+| Log Analytics (ingestion des journaux) | 5–15 $ |
+| **Total** | **~65–75 $** |
 
-Les 300 $ de crédits couvrent donc largement les 90 jours d'essai.
+Les 200 $ de l'essai gratuit couvrent donc confortablement les 30 jours, mais
+**pas beaucoup plus**. Deux leviers si ça devient juste :
 
-Le load balancer est le poste le plus lourd. Pour une démo courte, mettre
-`ingress.active: false` et passer par `kubectl port-forward` économise cette
-ligne entière.
+- `ingress.active: false` + `kubectl port-forward` → **−22 $/mois**
+- Retirer le bloc `oms_agent` de `aks.tf` → jusqu'à **−15 $/mois** (au prix de
+  la perte des journaux du control plane)
 
-> **Détruire l'infrastructure quand elle ne sert pas** : `terraform destroy`.
-> Un cluster oublié consomme les crédits jour et nuit.
+> **Détruire l'infrastructure quand elle ne sert pas** : `terraform destroy`,
+> ou supprimer le groupe de ressources. Un cluster oublié consomme jour et
+> nuit, et l'essai Azure ne dure que 30 jours.
 
 ---
 
 ## Amorçage (une seule fois)
 
-Terraform ne peut pas créer le bucket qui contient son propre état : il faut
-l'amorcer à la main.
+Terraform ne peut pas créer le compte de stockage qui contient son propre
+état : il faut l'amorcer à la main.
 
 ```bash
-# 1. Projet et facturation
-gcloud auth login
-gcloud projects create assistant-financier-XXXXXX --name="Assistant Financier"
-gcloud config set project assistant-financier-XXXXXX
-# Lier le compte de facturation (indispensable, même avec des crédits) :
-gcloud billing projects link assistant-financier-XXXXXX --billing-account=XXXXXX-XXXXXX-XXXXXX
+az login
+az account set --subscription "<nom ou id de l'abonnement>"
+az account show --query id -o tsv     # → id_abonnement du terraform.tfvars
 
-# 2. Activer les API utilisées
-gcloud services enable \
-  compute.googleapis.com \
-  container.googleapis.com \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  cloudresourcemanager.googleapis.com
+# Groupe de ressources dédié à l'état, séparé de celui du cluster : il ne doit
+# pas disparaître avec un `terraform destroy`.
+az group create --name assistant-financier-tfstate --location westeurope
 
-# 3. Bucket de l'état Terraform (le versioning permet de revenir en arrière
-#    après un apply malheureux)
-gsutil mb -p assistant-financier-XXXXXX -l europe-west1 gs://assistant-financier-tfstate
-gsutil versioning set on gs://assistant-financier-tfstate
+# Le nom du compte de stockage doit être unique dans tout Azure, en
+# minuscules, sans tiret. Ajoutez un suffixe aléatoire.
+az storage account create \
+  --name afitfstateXXXXXX \
+  --resource-group assistant-financier-tfstate \
+  --location westeurope \
+  --sku Standard_LRS \
+  --encryption-services blob
+
+az storage container create \
+  --name tfstate \
+  --account-name afitfstateXXXXXX
+
+# Versioning : permet de revenir en arrière après un apply malheureux.
+az storage account blob-service-properties update \
+  --account-name afitfstateXXXXXX \
+  --resource-group assistant-financier-tfstate \
+  --enable-versioning true
 ```
 
 ## Provisionner
 
 ```bash
 cd terraform
-cp terraform.tfvars.example terraform.tfvars   # renseigner projet_gcp
+cp terraform.tfvars.example terraform.tfvars   # renseigner id_abonnement
 
 export TF_VAR_mot_de_passe_grafana='…'         # jamais dans un .tfvars
 
-terraform init -backend-config="bucket=assistant-financier-tfstate"
+terraform init \
+  -backend-config="resource_group_name=assistant-financier-tfstate" \
+  -backend-config="storage_account_name=afitfstateXXXXXX" \
+  -backend-config="container_name=tfstate"
+
 terraform plan      # TOUJOURS relire avant d'appliquer
 terraform apply
 ```
@@ -106,12 +136,15 @@ Comptez 10 à 15 minutes : la création du cluster et l'installation de
 kube-prometheus-stack sont les étapes longues.
 
 ```bash
-# Configurer kubectl (la commande exacte est aussi en sortie de terraform)
-gcloud container clusters get-credentials assistant-financier \
-  --zone europe-west1-b --project assistant-financier-XXXXXX
+az aks get-credentials \
+  --resource-group assistant-financier-rg \
+  --name assistant-financier \
+  --overwrite-existing
 
 kubectl get nodes
 ```
+
+Deux nœuds doivent apparaître, l'un du pool `systeme`, l'autre du pool `app`.
 
 ## Déployer l'application
 
@@ -136,10 +169,18 @@ helm upgrade --install assistant-financier ./helm/assistant-financier \
 déploiement non reproductible : deux `helm upgrade` identiques peuvent
 installer deux versions différentes, et le rollback ne veut plus rien dire.
 
-L'Ingress GCE met **5 à 10 minutes** à provisionner son IP au premier
-déploiement. `kubectl get ingress -n staging -w` pour la voir apparaître.
-Reporter ensuite le nom d'hôte réel dans `config.urlApiPubliqueClient` et
-`config.urlsClient`.
+Relever l'IP publique du contrôleur d'entrée :
+
+```bash
+kubectl get svc -n app-routing-system nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+```
+
+Reporter ensuite le nom d'hôte réel (ou l'IP) dans
+`config.urlApiPubliqueClient` et `config.urlsClient` de
+`values-staging.yaml`, puis redéployer. Ces deux valeurs doivent être des
+**origines complètes** (`https://hôte`) : le client résout son URL d'API avec
+`||`, donc une chaîne vide retomberait sur `localhost:5000`.
 
 ### Rollback
 
@@ -158,9 +199,6 @@ kubectl port-forward -n observabilite svc/observabilite-grafana 3000:80
 # http://localhost:3000 — utilisateur admin, mot de passe = TF_VAR_mot_de_passe_grafana
 ```
 
-Grafana arrive avec les tableaux de bord Kubernetes du chart, plus deux
-importés depuis grafana.com (application Node.js, vue par namespace).
-
 Prometheus : `kubectl port-forward -n observabilite svc/observabilite-kube-prometheus-prometheus 9090:9090`
 
 ---
@@ -177,14 +215,13 @@ Il manque, dans le repo serveur :
 
 1. **`prom-client`** — exposer `/metrics` : métriques par défaut du process
    Node, plus un histogramme de latence et un compteur de requêtes par route
-   et par code de statut. C'est ce qui alimente les quatre signaux d'or
-   (latence, trafic, erreurs, saturation).
+   et par code de statut. C'est ce qui alimente les quatre signaux d'or.
 2. **Logs structurés** — remplacer `morgan` par `pino`. Une ligne de log en
    texte libre n'est pas requêtable ; en JSON, elle devient filtrable par
-   `requestId`, `userId` ou `statusCode` dans Cloud Logging.
+   `requestId`, `userId` ou `statusCode`.
 3. **Arrêt propre** — intercepter `SIGTERM`, cesser d'accepter de nouvelles
    connexions, laisser les requêtes en cours se terminer. Sans ça, chaque
-   préemption d'un nœud Spot coupe des requêtes au milieu.
+   éviction d'un nœud Spot coupe des requêtes au milieu.
 
 ---
 
@@ -192,22 +229,27 @@ Il manque, dans le repo serveur :
 
 Volontairement laissé ouvert pour la démo, à resserrer avant tout usage réel :
 
-- `reseaux_autorises_api = 0.0.0.0/0` — l'API Kubernetes est joignable depuis
+- `plages_autorisees_api = []` — l'API Kubernetes est joignable depuis
   n'importe où. À restreindre à l'IP de sortie de l'équipe.
-- Les nœuds ont des IP publiques (pas de Cloud NAT, qui coûterait ~30 $/mois).
 - Grafana n'est pas exposé : accès par `port-forward` uniquement. C'est
   délibéré — l'exposer demanderait TLS et une vraie authentification.
-- Aucune `NetworkPolicy` : tous les pods peuvent se parler. GKE Dataplane V2
-  serait à activer pour les appliquer.
+- Aucune `NetworkPolicy` : tous les pods peuvent se parler.
+- Pas de TLS sur l'Ingress en staging. En production, `ingress.tls.nomSecret`
+  attend un Secret créé au préalable (cert-manager, ou `kubectl create secret
+  tls`) — AKS n'a pas d'équivalent au ManagedCertificate de GKE.
 
 ## Secrets attendus par la CI
 
 | Secret | Usage |
 |---|---|
-| `WIF_PROVIDER`, `WIF_SERVICE_ACCOUNT` | Workload Identity Federation — évite de stocker une clé JSON |
-| `BUCKET_ETAT_TF` | Bucket GCS de l'état Terraform |
-| `PROJET_GCP`, `ZONE_GCP`, `NOM_CLUSTER` | Cible du déploiement |
+| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | Authentification OIDC — aucun secret client stocké |
+| `GROUPE_RESSOURCES_ETAT`, `COMPTE_STOCKAGE_ETAT` | Backend Terraform |
+| `GROUPE_RESSOURCES`, `NOM_CLUSTER` | Cible du déploiement |
 | `MOT_DE_PASSE_GRAFANA` | Compte admin Grafana |
 | `JWT_CLE_PRIVEE`, `JWT_CLE_PUBLIQUE`, `COOKIE_SECRET` | Secrets applicatifs |
 | `POSTGRES_MOT_DE_PASSE` | Base dans le cluster |
 | `RESEND_API_KEY` | Envoi d'emails (optionnel) |
+
+L'authentification OIDC demande de créer une application Entra ID avec une
+*federated credential* pointant sur ce dépôt. Voir la documentation
+`azure/login` — c'est la partie la moins évidente de la mise en place.

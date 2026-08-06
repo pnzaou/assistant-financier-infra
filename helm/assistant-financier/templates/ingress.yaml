@@ -9,6 +9,10 @@
   Front et API partagent ainsi la même origine. Deux conséquences directes :
   le CORS devient inutile en production, et les cookies de session sont
   envoyés sans configuration cross-site particulière.
+
+  Aucune annotation spécifique à un fournisseur n'est codée en dur ici : ce
+  qui dépend du contrôleur passe par `ingress.annotations`, pour que le même
+  chart fonctionne derrière nginx (AKS), GCE (GKE) ou ALB (EKS).
 */}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -16,18 +20,20 @@ metadata:
   name: {{ include "af.nomComplet" . }}
   labels:
     {{- include "af.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
   annotations:
-    {{- if .Values.ingress.ipStatique }}
-    # Adresse IP globale réservée : sans elle, l'IP change à chaque
-    # recréation de l'Ingress et l'enregistrement DNS devient caduc.
-    kubernetes.io/ingress.global-static-ip-name: {{ .Values.ingress.ipStatique | quote }}
-    {{- end }}
-    {{- if .Values.ingress.tls.active }}
-    networking.gke.io/managed-certificates: {{ .Values.ingress.tls.nomCertificatGere | quote }}
-    kubernetes.io/ingress.allow-http: "false"
-    {{- end }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  {{- if and .Values.ingress.tls.active .Values.ingress.tls.nomSecret }}
+  tls:
+    - secretName: {{ .Values.ingress.tls.nomSecret }}
+      {{- if .Values.ingress.hote }}
+      hosts:
+        - {{ .Values.ingress.hote | quote }}
+      {{- end }}
+  {{- end }}
   rules:
     # `host` est placé APRÈS `http` volontairement : l'ordre des clés d'un
     # mapping YAML est sans importance, et cette forme évite d'avoir à
@@ -48,9 +54,9 @@ spec:
                 name: {{ include "af.nomComplet" . }}-serveur
                 port:
                   number: {{ .Values.serveur.port }}
-          # Route attrape-tout, déclarée en dernier. L'Ingress GCE évalue de
-          # toute façon du chemin le plus spécifique au plus général, mais cet
-          # ordre rend le fichier lisible.
+          # Route attrape-tout, déclarée en dernier. nginx comme GCE évaluent
+          # du chemin le plus spécifique au plus général, mais cet ordre rend
+          # le fichier lisible.
           - path: /
             pathType: Prefix
             backend:

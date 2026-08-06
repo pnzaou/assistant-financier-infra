@@ -5,10 +5,6 @@ metadata:
   labels:
     {{- include "af.labels" . | nindent 4 }}
     app.kubernetes.io/component: serveur
-  annotations:
-    # Demande à GKE de créer un NEG : le load balancer envoie alors le trafic
-    # directement aux pods, sans rebond par kube-proxy. Requis par l'Ingress GCE.
-    cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: ClusterIP
   ports:
@@ -104,6 +100,7 @@ spec:
             readOnlyRootFilesystem: false
             capabilities:
               drop: ["ALL"]
+      {{- include "af.ordonnancement" . | nindent 6 }}
       # Sur des nœuds Spot, répartir les replicas sur des nœuds différents :
       # une préemption ne doit pas emporter toute l'API d'un coup.
       topologySpreadConstraints:
@@ -152,7 +149,7 @@ metadata:
     {{- include "af.labels" . | nindent 4 }}
     app.kubernetes.io/component: serveur
 spec:
-  # Garantit qu'une opération volontaire (drain de nœud, mise à jour GKE) ne
+  # Garantit qu'une opération volontaire (drain de nœud, mise à jour du cluster) ne
   # supprime jamais le dernier pod disponible.
   minAvailable: 1
   selector:

@@ -2,9 +2,9 @@ terraform {
   required_version = ">= 1.9"
 
   required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 6.0"
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
@@ -14,17 +14,22 @@ terraform {
       source  = "hashicorp/helm"
       version = "~> 2.17"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 
   # État distant : indispensable dès qu'on est plusieurs. En local, deux
   # `terraform apply` concurrents se marcheraient dessus et pourraient
-  # détruire des ressources créées par l'autre. GCS fournit en plus le
-  # verrouillage automatiquement, sans table de lock à provisionner.
+  # détruire des ressources créées par l'autre. Azure Blob Storage fournit
+  # le verrouillage nativement, via les baux de blob.
   #
-  # Le bucket doit exister AVANT le premier `terraform init` — il ne peut pas
-  # se créer lui-même (l'œuf et la poule). Voir README.md, section « Amorçage ».
-  backend "gcs" {
-    # bucket = fourni par -backend-config au moment du init (voir README)
-    prefix = "assistant-financier/etat"
+  # Le compte de stockage doit exister AVANT le premier `terraform init` — il
+  # ne peut pas se créer lui-même. Voir README.md, section « Amorçage ».
+  backend "azurerm" {
+    # resource_group_name, storage_account_name et container_name sont
+    # fournis par -backend-config au moment du init (voir README).
+    key = "assistant-financier.tfstate"
   }
 }

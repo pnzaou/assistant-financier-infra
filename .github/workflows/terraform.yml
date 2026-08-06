@@ -48,7 +48,7 @@ jobs:
         run: terraform fmt -check -recursive -diff
 
       # `-backend=false` : la validation syntaxique n'a pas besoin de l'état
-      # distant, donc pas besoin d'identifiants GCP non plus.
+      # distant, donc pas besoin d'identifiants Azure non plus.
       - name: Initialisation (sans backend)
         working-directory: ${{ env.REPERTOIRE_TF }}
         run: terraform init -backend=false -input=false
@@ -106,15 +106,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Workload Identity Federation : GitHub échange le jeton OIDC du job
-      # contre des identifiants GCP éphémères. Aucune clé de compte de service
-      # à stocker en secret — c'est ce qu'on veut, une clé JSON qui fuite
-      # donne un accès permanent au projet.
-      - name: Authentification GCP
-        uses: google-github-actions/auth@v2
+      # OIDC : GitHub échange le jeton du job contre un jeton Azure éphémère.
+      # Aucun secret client stocké — un secret qui fuite donnerait un accès
+      # permanent à l'abonnement.
+      - name: Authentification Azure
+        uses: azure/login@v2
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -122,14 +122,23 @@ jobs:
 
       - name: Initialisation
         working-directory: ${{ env.REPERTOIRE_TF }}
-        run: terraform init -input=false -backend-config="bucket=${{ secrets.BUCKET_ETAT_TF }}"
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ secrets.GROUPE_RESSOURCES_ETAT }}" \
+            -backend-config="storage_account_name=${{ secrets.COMPTE_STOCKAGE_ETAT }}" \
+            -backend-config="container_name=tfstate"
 
       - name: Plan
         id: plan
         working-directory: ${{ env.REPERTOIRE_TF }}
         env:
-          TF_VAR_projet_gcp: ${{ secrets.PROJET_GCP }}
+          TF_VAR_id_abonnement: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           TF_VAR_mot_de_passe_grafana: ${{ secrets.MOT_DE_PASSE_GRAFANA }}
+          # Le provider azurerm réutilise le jeton OIDC obtenu par azure/login.
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform plan -input=false -no-color -out=plan.tfplan | tee /tmp/plan.txt
           echo "resume=$(grep -E '^Plan:|No changes' /tmp/plan.txt | head -1)" >> "$GITHUB_OUTPUT"
@@ -166,11 +175,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Authentification GCP
-        uses: google-github-actions/auth@v2
+      - name: Authentification Azure
+        uses: azure/login@v2
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -178,11 +188,20 @@ jobs:
 
       - name: Initialisation
         working-directory: ${{ env.REPERTOIRE_TF }}
-        run: terraform init -input=false -backend-config="bucket=${{ secrets.BUCKET_ETAT_TF }}"
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ secrets.GROUPE_RESSOURCES_ETAT }}" \
+            -backend-config="storage_account_name=${{ secrets.COMPTE_STOCKAGE_ETAT }}" \
+            -backend-config="container_name=tfstate"
 
       - name: Apply
         working-directory: ${{ env.REPERTOIRE_TF }}
         env:
-          TF_VAR_projet_gcp: ${{ secrets.PROJET_GCP }}
+          TF_VAR_id_abonnement: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           TF_VAR_mot_de_passe_grafana: ${{ secrets.MOT_DE_PASSE_GRAFANA }}
+          # Le provider azurerm réutilise le jeton OIDC obtenu par azure/login.
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform apply -input=false -auto-approve

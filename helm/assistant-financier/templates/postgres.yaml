@@ -46,6 +46,7 @@ spec:
         {{- include "af.selecteurs" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
+      {{- include "af.ordonnancement" . | nindent 6 }}
       securityContext:
         # UID de l'utilisateur postgres dans l'image alpine. fsGroup fait
         # appartenir le volume à ce groupe, sinon le conteneur ne peut pas

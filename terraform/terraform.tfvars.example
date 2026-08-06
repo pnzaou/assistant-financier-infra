@@ -2,21 +2,33 @@
 #   cp terraform.tfvars.example terraform.tfvars
 #
 # terraform.tfvars est ignoré par git : il contient l'identifiant de ton
-# projet GCP, qui n'a rien à faire dans un dépôt public.
+# abonnement Azure, qui n'a rien à faire dans un dépôt public.
 
-projet_gcp = "assistant-financier-XXXXXX"
+# az account show --query id -o tsv
+id_abonnement = "00000000-0000-0000-0000-000000000000"
 
-# europe-west1 (Belgique) : la moins chère des régions européennes.
-region = "europe-west1"
-zone   = "europe-west1-b"
+groupe_ressources = "assistant-financier-rg"
 
-nom_cluster  = "assistant-financier"
-type_machine = "e2-medium"
+# westeurope : plus de capacité Spot et moins cher que francecentral, qui est
+# la région la plus proche de Dakar en latence. Arbitrage assumé : sur un
+# projet d'école, la disponibilité des VM Spot compte plus que 20 ms de RTT.
+region = "westeurope"
 
-nb_noeuds_min = 2
-nb_noeuds_max = 4
+nom_cluster = "assistant-financier"
 
-# false = VM classiques, ~3x plus cher mais jamais préemptées.
+# Laisser null pour prendre la version stable par défaut de la région.
+version_kubernetes = null
+
+# ─── Pool système (Regular obligatoire — Azure refuse un pool système Spot)
+taille_noeud_systeme = "Standard_B2s"
+nb_noeuds_systeme    = 1
+
+# ─── Pool applicatif (Spot)
+taille_noeud_app  = "Standard_B2s"
+nb_noeuds_app_min = 1
+nb_noeuds_app_max = 3
+
+# false = VM classiques, ~5x plus cher mais jamais évincées.
 noeuds_spot = true
 
 activer_observabilite = true
@@ -25,10 +37,9 @@ activer_observabilite = true
 #   export TF_VAR_mot_de_passe_grafana='...'      (bash)
 #   $env:TF_VAR_mot_de_passe_grafana = '...'      (PowerShell)
 
-# Restreindre dès que possible à l'IP de sortie de l'équipe :
-#   reseaux_autorises_api = [
-#     { cidr = "41.82.x.x/32", description = "Bureau" },
-#   ]
+# Liste vide = API Kubernetes ouverte à tous. À restreindre dès que possible :
+#   plages_autorisees_api = ["41.82.x.x/32"]
+plages_autorisees_api = []
 
 etiquettes = {
   projet      = "assistant-financier"

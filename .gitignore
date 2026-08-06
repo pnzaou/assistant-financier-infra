@@ -5,12 +5,12 @@
 
 # L'état ne doit JAMAIS être commité : il contient en clair les valeurs des
 # variables sensibles (mot de passe Grafana, certificats du cluster) et sert
-# de source de vérité. Il vit dans le bucket GCS déclaré dans versions.tf.
+# de source de vérité. Il vit dans le conteneur Blob déclaré dans versions.tf.
 *.tfstate
 *.tfstate.*
 .terraform.tfstate.lock.info
 
-# Contient l'identifiant du projet GCP.
+# Contient l'identifiant de l'abonnement Azure.
 terraform.tfvars
 *.auto.tfvars
 !terraform.tfvars.example
@@ -46,7 +46,7 @@ values-secrets.yaml
 *.local.yaml
 
 # ─── Identifiants ────────────────────────────────────────────────
-# Clés de compte de service GCP : à ne jamais faire entrer dans le dépôt.
+# Identifiants de service principal Azure : jamais dans le dépôt.
 *.json
 !package.json
 !.terraform.lock.hcl

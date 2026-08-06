@@ -47,6 +47,7 @@ spec:
         {{- include "af.selecteurs" . | nindent 8 }}
         app.kubernetes.io/component: migration
     spec:
+      {{- include "af.ordonnancement" . | nindent 6 }}
       restartPolicy: Never
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

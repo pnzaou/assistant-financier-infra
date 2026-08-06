@@ -5,8 +5,6 @@ metadata:
   labels:
     {{- include "af.labels" . | nindent 4 }}
     app.kubernetes.io/component: client
-  annotations:
-    cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: ClusterIP
   ports:
@@ -84,6 +82,7 @@ spec:
               # réécrire /config.js au démarrage : on ne peut pas tout retirer.
               drop: ["ALL"]
               add: ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"]
+      {{- include "af.ordonnancement" . | nindent 6 }}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname

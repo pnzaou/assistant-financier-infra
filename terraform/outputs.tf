@@ -1,17 +1,16 @@
 output "nom_cluster" {
-  description = "Nom du cluster GKE."
-  value       = google_container_cluster.principal.name
+  description = "Nom du cluster AKS."
+  value       = azurerm_kubernetes_cluster.principal.name
 }
 
-output "endpoint_cluster" {
-  description = "Adresse de l'API Kubernetes."
-  value       = google_container_cluster.principal.endpoint
-  sensitive   = true
+output "groupe_ressources" {
+  description = "Groupe de ressources. Le supprimer supprime TOUT ce qu'il contient."
+  value       = azurerm_resource_group.principal.name
 }
 
 output "commande_kubeconfig" {
   description = "À exécuter pour configurer kubectl sur ce cluster."
-  value       = "gcloud container clusters get-credentials ${google_container_cluster.principal.name} --zone ${var.zone} --project ${var.projet_gcp}"
+  value       = "az aks get-credentials --resource-group ${azurerm_resource_group.principal.name} --name ${azurerm_kubernetes_cluster.principal.name} --overwrite-existing"
 }
 
 output "commande_grafana" {
@@ -21,16 +20,27 @@ output "commande_grafana" {
   ) : "Observabilité désactivée (activer_observabilite = false)"
 }
 
-output "compte_service_noeuds" {
-  description = "Compte de service porté par les nœuds GKE."
-  value       = google_service_account.noeuds.email
+output "ip_ingress" {
+  description = "Commande pour relever l'IP publique du contrôleur d'entrée nginx géré par AKS."
+  value       = "kubectl get svc -n app-routing-system nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'"
+}
+
+output "classe_ingress" {
+  description = "Valeur à mettre dans ingress.className du chart Helm."
+  value       = "webapprouting.kubernetes.io"
+}
+
+output "classe_stockage" {
+  description = "Valeur à mettre dans postgres.stockage.classe du chart Helm."
+  value       = local.classe_stockage
 }
 
 output "reseau" {
-  description = "VPC et sous-réseau du cluster."
+  description = "VNet et sous-réseau du cluster."
   value = {
-    vpc         = google_compute_network.vpc.name
-    sous_reseau = google_compute_subnetwork.noeuds.name
-    plage_pods  = google_compute_subnetwork.noeuds.secondary_ip_range[0].ip_cidr_range
+    vnet         = azurerm_virtual_network.vnet.name
+    sous_reseau  = azurerm_subnet.noeuds.name
+    plage_noeuds = azurerm_subnet.noeuds.address_prefixes[0]
+    plage_pods   = azurerm_kubernetes_cluster.principal.network_profile[0].pod_cidr
   }
 }

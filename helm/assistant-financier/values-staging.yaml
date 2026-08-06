@@ -32,6 +32,7 @@ postgres:
   active: true
   stockage:
     taille: 5Gi
+    classe: managed-csi
 
 config:
   nodeEnv: production
@@ -50,7 +51,8 @@ config:
 
 ingress:
   active: true
-  className: gce
+  # Contrôleur nginx géré par AKS (bloc web_app_routing du Terraform).
+  className: webapprouting.kubernetes.io
   hote: ""
   tls:
     active: false

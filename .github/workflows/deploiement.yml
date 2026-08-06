@@ -67,24 +67,22 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "→ $ENV : serveur=$TAG_SRV client=$TAG_CLI"
 
-      - name: Authentification GCP
-        uses: google-github-actions/auth@v2
+      # OIDC : GitHub échange le jeton du job contre un jeton Azure éphémère.
+      # Aucun secret client stocké — une clé qui fuite donnerait un accès
+      # permanent à l'abonnement.
+      - name: Authentification Azure
+        uses: azure/login@v2
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-
-      - name: Outils gcloud + plugin d'authentification GKE
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          # Sans ce plugin, kubectl échoue depuis la 1.26 sur
-          # « no Auth Provider found for name gcp ».
-          install_components: gke-gcloud-auth-plugin
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Accès au cluster
         run: |
-          gcloud container clusters get-credentials "${{ secrets.NOM_CLUSTER }}" \
-            --zone "${{ secrets.ZONE_GCP }}" \
-            --project "${{ secrets.PROJET_GCP }}"
+          az aks get-credentials \
+            --resource-group "${{ secrets.GROUPE_RESSOURCES }}" \
+            --name "${{ secrets.NOM_CLUSTER }}" \
+            --overwrite-existing
 
       - name: Installation de Helm
         uses: azure/setup-helm@v4

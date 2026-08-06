@@ -1,31 +1,42 @@
-provider "google" {
-  project = var.projet_gcp
-  region  = var.region
-  zone    = var.zone
+provider "azurerm" {
+  subscription_id = var.id_abonnement
+
+  features {
+    resource_group {
+      # `false` : refuser de supprimer un groupe de ressources qui contient
+      # encore des ressources non gérées par Terraform. Sans ce garde-fou,
+      # un `destroy` emporterait aussi ce qui aurait été créé à la main.
+      prevent_deletion_if_contains_resources = true
+    }
+  }
 }
 
 # ─────────────────────────────────────────────────────────────────
 # Providers Kubernetes et Helm : ils s'authentifient auprès du cluster que
-# Terraform vient lui-même de créer.
+# Terraform vient lui-même de créer, via le kubeconfig administrateur qu'AKS
+# expose en sortie.
 #
-# On passe par un jeton OAuth du provider google plutôt que par un
-# kubeconfig sur le disque : ça évite d'exiger `gcloud container
-# clusters get-credentials` avant chaque apply, et ça fonctionne tel quel
-# sur un runner de CI.
+# Pas de fichier kubeconfig sur le disque : ça évite d'exiger un
+# `az aks get-credentials` avant chaque apply, et ça fonctionne tel quel sur
+# un runner de CI.
 # ─────────────────────────────────────────────────────────────────
 
-data "google_client_config" "courant" {}
+locals {
+  kube = azurerm_kubernetes_cluster.principal.kube_config[0]
+}
 
 provider "kubernetes" {
-  host                   = "https://${google_container_cluster.principal.endpoint}"
-  token                  = data.google_client_config.courant.access_token
-  cluster_ca_certificate = base64decode(google_container_cluster.principal.master_auth[0].cluster_ca_certificate)
+  host                   = local.kube.host
+  client_certificate     = base64decode(local.kube.client_certificate)
+  client_key             = base64decode(local.kube.client_key)
+  cluster_ca_certificate = base64decode(local.kube.cluster_ca_certificate)
 }
 
 provider "helm" {
   kubernetes {
-    host                   = "https://${google_container_cluster.principal.endpoint}"
-    token                  = data.google_client_config.courant.access_token
-    cluster_ca_certificate = base64decode(google_container_cluster.principal.master_auth[0].cluster_ca_certificate)
+    host                   = local.kube.host
+    client_certificate     = base64decode(local.kube.client_certificate)
+    client_key             = base64decode(local.kube.client_key)
+    cluster_ca_certificate = base64decode(local.kube.cluster_ca_certificate)
   }
 }

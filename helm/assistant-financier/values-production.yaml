@@ -33,10 +33,11 @@ postgres:
   # mais un StatefulSet mono-replica SANS SAUVEGARDE n'a rien à faire en
   # production. Basculer sur Cloud SQL dès que le projet sort de la démo :
   #   postgres.active = false
-  #   + un Secret contenant l'URL de connexion Cloud SQL
+  #   + secrets.databaseUrl avec l'URL de connexion Azure
   active: true
   stockage:
     taille: 20Gi
+    classe: managed-csi
   ressources:
     requests:
       cpu: 200m
@@ -52,12 +53,13 @@ config:
 
 ingress:
   active: true
-  className: gce
+  className: webapprouting.kubernetes.io
   hote: "assistant-financier.exemple.com"
-  ipStatique: "assistant-financier-ip"
   tls:
     active: true
-    nomCertificatGere: "assistant-financier-cert"
+    # Secret TLS à créer au préalable (cert-manager, ou `kubectl create secret
+    # tls`). AKS ne fournit pas d'équivalent au ManagedCertificate de GKE.
+    nomSecret: "assistant-financier-tls"
 
 migrations:
   active: true

@@ -1,90 +1,106 @@
-variable "projet_gcp" {
-  description = "Identifiant du projet GCP (pas son nom d'affichage)."
+variable "id_abonnement" {
+  description = "Identifiant de l'abonnement Azure (az account show --query id -o tsv)."
   type        = string
+}
+
+variable "groupe_ressources" {
+  description = <<-EOT
+    Nom du groupe de ressources. Notion propre à Azure, sans équivalent GCP :
+    c'est un conteneur logique. Tout supprimer revient à supprimer le groupe,
+    ce qui est le garde-fou le plus efficace contre les ressources oubliées
+    qui continuent de consommer les crédits.
+  EOT
+  type        = string
+  default     = "assistant-financier-rg"
 }
 
 variable "region" {
-  description = "Région GCP. europe-west1 (Belgique) est la moins chère des régions européennes et la plus proche de Dakar en latence."
+  description = "Région Azure. francecentral est la plus proche de Dakar ; westeurope est moins chère et a plus de capacité Spot."
   type        = string
-  default     = "europe-west1"
-}
-
-variable "zone" {
-  description = <<-EOT
-    Zone du cluster. Le cluster est ZONAL et non régional, délibérément :
-    un cluster régional réplique le control plane sur trois zones et
-    triple le nombre de nœuds. Pour un projet d'école c'est trois fois
-    la facture sans bénéfice — et GKE offre la gestion d'UN cluster
-    zonal par compte de facturation.
-  EOT
-  type        = string
-  default     = "europe-west1-b"
+  default     = "westeurope"
 }
 
 variable "nom_cluster" {
-  description = "Nom du cluster GKE."
+  description = "Nom du cluster AKS."
   type        = string
   default     = "assistant-financier"
 }
 
-variable "type_machine" {
-  description = "Type de machine des nœuds. e2-medium = 2 vCPU / 4 Go, le minimum viable pour faire tenir l'API, le front, Postgres et la stack d'observabilité."
+variable "version_kubernetes" {
+  description = "Version de Kubernetes. Laisser vide pour prendre la version stable par défaut de la région."
   type        = string
-  default     = "e2-medium"
+  default     = null
 }
 
-variable "nb_noeuds_min" {
-  description = "Taille minimale du pool (autoscaling)."
-  type        = number
-  default     = 2
+# ─── Pool système ────────────────────────────────────────────────
+# Azure IMPOSE que le pool par défaut (celui qui héberge les composants
+# système : CoreDNS, metrics-server…) soit en priorité Regular. Un pool
+# système en Spot est refusé à la création. D'où deux pools distincts.
+
+variable "taille_noeud_systeme" {
+  description = "Type de VM du pool système. Standard_B2s = 2 vCPU / 4 Go, la plus petite qui accepte AKS."
+  type        = string
+  default     = "Standard_B2s"
 }
 
-variable "nb_noeuds_max" {
-  description = "Taille maximale du pool (autoscaling). Plafond volontairement bas : c'est le garde-fou contre une boucle de scaling qui viderait les crédits."
+variable "nb_noeuds_systeme" {
+  description = "Nombre de nœuds système. 1 suffit hors production."
   type        = number
-  default     = 4
+  default     = 1
+}
+
+# ─── Pool applicatif ─────────────────────────────────────────────
+
+variable "taille_noeud_app" {
+  description = "Type de VM du pool applicatif."
+  type        = string
+  default     = "Standard_B2s"
+}
+
+variable "nb_noeuds_app_min" {
+  description = "Taille minimale du pool applicatif (autoscaling)."
+  type        = number
+  default     = 1
+}
+
+variable "nb_noeuds_app_max" {
+  description = "Taille maximale du pool applicatif. Plafond volontairement bas : garde-fou contre une boucle de scaling qui viderait les crédits."
+  type        = number
+  default     = 3
 }
 
 variable "noeuds_spot" {
   description = <<-EOT
-    Utiliser des VM Spot (préemptibles), 60 à 91 % moins chères.
-    Contrepartie : Google peut les récupérer avec 30 s de préavis.
-    Acceptable ici — les Deployments ont plusieurs replicas et
-    redémarrent ailleurs. À passer à false pour une vraie prod.
+    Utiliser des VM Spot pour le pool applicatif, jusqu'à 90 % moins chères.
+    Contrepartie : Azure peut les récupérer avec 30 s de préavis, et elles
+    portent un taint `kubernetes.azure.com/scalesetpriority=spot:NoSchedule`
+    que les pods doivent tolérer (le chart s'en charge).
+    À passer à false pour une vraie production.
   EOT
   type        = bool
   default     = true
 }
 
-variable "reseaux_autorises_api" {
-  description = <<-EOT
-    Plages CIDR autorisées à joindre l'API Kubernetes.
-    0.0.0.0/0 laisse le control plane ouvert au monde : pratique pour
-    une démo depuis n'importe où, mais à restreindre à l'IP de sortie de
-    l'équipe et à celle des runners GitHub dès que possible.
-  EOT
-  type = list(object({
-    cidr        = string
-    description = string
-  }))
-  default = [
-    {
-      cidr        = "0.0.0.0/0"
-      description = "Ouvert — à restreindre"
-    }
-  ]
-}
-
 variable "activer_observabilite" {
-  description = "Installer kube-prometheus-stack (Prometheus + Grafana + Alertmanager) dans le cluster. Compte pour ~1,5 Go de RAM."
+  description = "Installer kube-prometheus-stack (Prometheus + Grafana + Alertmanager). Compte pour ~1,5 Go de RAM."
   type        = bool
   default     = true
 }
 
 variable "mot_de_passe_grafana" {
-  description = "Mot de passe de l'utilisateur admin de Grafana. À passer par TF_VAR_mot_de_passe_grafana, jamais en clair dans un .tfvars commité."
+  description = "Mot de passe admin de Grafana. À passer par TF_VAR_mot_de_passe_grafana, jamais en clair dans un .tfvars commité."
   type        = string
   sensitive   = true
+}
+
+variable "plages_autorisees_api" {
+  description = <<-EOT
+    Plages CIDR autorisées à joindre l'API Kubernetes.
+    Liste vide = ouvert à tous : pratique pour une démo depuis n'importe où,
+    à restreindre à l'IP de sortie de l'équipe dès que possible.
+  EOT
+  type        = list(string)
+  default     = []
 }
 
 variable "etiquettes" {

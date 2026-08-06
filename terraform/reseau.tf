@@ -1,94 +1,44 @@
 # ─────────────────────────────────────────────────────────────────
-# Réseau : un VPC dédié plutôt que le réseau « default » de GCP.
+# Groupe de ressources et réseau.
 #
-# Le réseau default arrive avec des règles pare-feu permissives (SSH ouvert
-# au monde, entre autres) et un sous-réseau dans chaque région. On repart
-# d'un VPC vide dont on maîtrise chaque règle.
+# Le groupe de ressources est la brique de base d'Azure : toutes les
+# ressources y appartiennent, et le supprimer supprime tout ce qu'il
+# contient. C'est le filet de sécurité le plus fiable contre les
+# ressources oubliées qui continuent d'être facturées.
 # ─────────────────────────────────────────────────────────────────
 
-resource "google_compute_network" "vpc" {
-  name    = "${var.nom_cluster}-vpc"
-  project = var.projet_gcp
-
-  # Les sous-réseaux sont déclarés explicitement ci-dessous : sans ça GCP en
-  # crée un par région, dont on n'utilisera jamais 99 %.
-  auto_create_subnetworks = false
-
-  # Les nœuds ont des IP publiques (voir gke.tf) : sans Cloud NAT, un MTU
-  # non standard casserait certains flux TLS sortants.
-  mtu = 1460
+resource "azurerm_resource_group" "principal" {
+  name     = var.groupe_ressources
+  location = var.region
+  tags     = var.etiquettes
 }
 
-resource "google_compute_subnetwork" "noeuds" {
-  name          = "${var.nom_cluster}-noeuds"
-  project       = var.projet_gcp
-  region        = var.region
-  network       = google_compute_network.vpc.id
-  ip_cidr_range = "10.10.0.0/20" # 4 094 adresses de nœuds
-
-  # Cluster VPC-natif : les pods reçoivent de vraies IP routables du VPC
-  # (alias IP) au lieu de passer par un overlay. C'est le mode par défaut
-  # depuis GKE 1.21 et le prérequis de Workload Identity.
-  secondary_ip_range {
-    range_name    = "pods"
-    ip_cidr_range = "10.20.0.0/16" # 65 534 IP de pods
-  }
-
-  secondary_ip_range {
-    range_name    = "services"
-    ip_cidr_range = "10.30.0.0/20" # 4 094 IP de Services
-  }
-
-  # Journalise les flux réseau — utile pour comprendre a posteriori qui parle
-  # à qui. Échantillonné à 50 % pour ne pas gonfler la facture Cloud Logging.
-  log_config {
-    aggregation_interval = "INTERVAL_10_MIN"
-    flow_sampling        = 0.5
-    metadata             = "INCLUDE_ALL_METADATA"
-  }
+resource "azurerm_virtual_network" "vnet" {
+  name                = "${var.nom_cluster}-vnet"
+  location            = azurerm_resource_group.principal.location
+  resource_group_name = azurerm_resource_group.principal.name
+  address_space       = ["10.10.0.0/16"]
+  tags                = var.etiquettes
 }
 
-# ─── Règles pare-feu ─────────────────────────────────────────────
-# Le trafic HTTP/HTTPS entrant n'a PAS besoin de règle : il arrive par le
-# load balancer géré par l'Ingress, qui ouvre ses propres règles. On se
-# limite donc au strict nécessaire.
+resource "azurerm_subnet" "noeuds" {
+  name                 = "${var.nom_cluster}-noeuds"
+  resource_group_name  = azurerm_resource_group.principal.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
 
-resource "google_compute_firewall" "sante_load_balancer" {
-  name    = "${var.nom_cluster}-sondes-lb"
-  project = var.projet_gcp
-  network = google_compute_network.vpc.name
-
-  description = "Autorise les sondes de santé des load balancers Google vers les nœuds."
-
-  allow {
-    protocol = "tcp"
-  }
-
-  # Plages fixes et documentées des sondes Google. Sans elles, le load
-  # balancer déclarerait tous les backends en échec et renverrait des 502.
-  source_ranges = ["35.191.0.0/16", "130.211.0.0/22"]
-  target_tags   = ["gke-${var.nom_cluster}"]
+  # /20 = 4 091 adresses utilisables (Azure en réserve 5 par sous-réseau).
+  # En mode overlay, seuls les NŒUDS consomment ces adresses : les pods
+  # vivent sur un réseau séparé, ce qui évite d'épuiser le VNet.
+  address_prefixes = ["10.10.0.0/20"]
 }
 
-resource "google_compute_firewall" "interne" {
-  name    = "${var.nom_cluster}-interne"
-  project = var.projet_gcp
-  network = google_compute_network.vpc.name
-
-  description = "Trafic entre nœuds et pods du cluster."
-
-  allow {
-    protocol = "tcp"
-  }
-  allow {
-    protocol = "udp"
-  }
-  allow {
-    protocol = "icmp"
-  }
-
-  source_ranges = [
-    google_compute_subnetwork.noeuds.ip_cidr_range,
-    "10.20.0.0/16", # pods
-  ]
+# ─────────────────────────────────────────────────────────────────
+# Suffixe aléatoire pour les noms devant être uniques à l'échelle mondiale
+# (DNS des IP publiques). Sans lui, deux déploiements du projet entreraient
+# en collision.
+# ─────────────────────────────────────────────────────────────────
+resource "random_string" "suffixe" {
+  length  = 6
+  special = false
+  upper   = false
 }

@@ -4,6 +4,20 @@
 
 nomComplet: "" # force le nom des ressources ; sinon dérivé du nom de la release
 
+# ─── Ordonnancement ──────────────────────────────────────────────
+# Les deux pools de nœuds AKS sont taintés :
+#   pool système    → CriticalAddonsOnly=true:NoSchedule
+#   pool applicatif → kubernetes.azure.com/scalesetpriority=spot:NoSchedule
+# Sans tolérer le taint Spot, AUCUN pod applicatif ne trouverait de nœud et
+# tout resterait en Pending. À vider si le cluster n'utilise pas de Spot.
+tolerations:
+  - key: kubernetes.azure.com/scalesetpriority
+    operator: Equal
+    value: spot
+    effect: NoSchedule
+
+nodeSelector: {}
+
 # ─── Images ──────────────────────────────────────────────────────
 # Publiées par la CI des deux repos applicatifs sur GHCR.
 #
@@ -67,7 +81,9 @@ postgres:
   secretExistant: "" # si renseigné, prime sur motDePasse
   stockage:
     taille: 10Gi
-    classe: standard-rwo
+    # `managed-csi` = SSD Standard sur AKS. Sur GKE ce serait `standard-rwo`,
+    # sur EKS `gp3` : c'est la valeur à changer si le cluster change de nuage.
+    classe: managed-csi
   ressources:
     requests:
       cpu: 100m
@@ -105,14 +121,19 @@ secrets:
 # ─── Exposition ──────────────────────────────────────────────────
 ingress:
   active: true
-  # `gce` = load balancer HTTP(S) natif GKE. Pas de contrôleur à installer,
-  # mais il met 5 à 10 minutes à provisionner son IP au premier déploiement.
-  className: gce
+  # `webapprouting.kubernetes.io` = contrôleur nginx géré par AKS, activé par
+  # le bloc `web_app_routing` du Terraform. Rien à installer soi-même, et
+  # ~125 $/mois d'économisés par rapport à Application Gateway (AGIC).
+  # Sur GKE ce serait `gce`, avec un contrôleur nginx autogéré `nginx`.
+  className: webapprouting.kubernetes.io
   hote: "" # ex. assistant-financier.exemple.com
-  ipStatique: "" # nom d'une adresse IP globale réservée, si applicable
+  # Annotations additionnelles, propres au contrôleur retenu.
+  annotations: {}
   tls:
     active: false
-    nomCertificatGere: "" # ManagedCertificate GKE
+    # Nom du Secret contenant le certificat (créé par cert-manager, ou à la
+    # main). Sur GKE on utiliserait plutôt un ManagedCertificate.
+    nomSecret: ""
 
 # ─── Observabilité ───────────────────────────────────────────────
 observabilite:

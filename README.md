@@ -227,27 +227,23 @@ Prometheus : `kubectl port-forward -n observabilite svc/observabilite-kube-prome
 
 ---
 
-## Ce qui reste à faire côté serveur
+## Instrumentation de l'API
 
 Le chart crée un `ServiceMonitor` qui demande à Prometheus de scruter
-`/metrics` sur l'API. **Cet endpoint n'existe pas encore** : tant qu'il n'est
-pas ajouté, la cible apparaîtra `down` dans Prometheus et les tableaux de bord
-applicatifs resteront vides. Le reste (métriques du cluster, des nœuds, des
-pods) fonctionne indépendamment.
+`/metrics` sur l'API. L'endpoint existe depuis la branche `feat/observabilite`
+du repo serveur, avec :
 
-Il manque, dans le repo serveur :
+- les métriques du process Node (mémoire, boucle d'événements, GC), un
+  histogramme de latence et des compteurs de requêtes et d'erreurs ;
+- des journaux JSON (`pino`) filtrables par `requestId`, `statut` ou durée,
+  avec masquage des en-têtes `Authorization` et `Cookie` ;
+- un arrêt en douceur sur `SIGTERM` : `/health` bascule en 503, cinq secondes
+  d'attente que Kubernetes cesse de router, puis fermeture du serveur et du
+  pool PostgreSQL.
 
-1. **`prom-client`** — exposer `/metrics` : métriques par défaut du process
-   Node, plus un histogramme de latence et un compteur de requêtes par route
-   et par code de statut. C'est ce qui alimente les quatre signaux d'or.
-2. **Logs structurés** — remplacer `morgan` par `pino`. Une ligne de log en
-   texte libre n'est pas requêtable ; en JSON, elle devient filtrable par
-   `requestId`, `userId` ou `statusCode`.
-3. **Arrêt propre** — intercepter `SIGTERM`, cesser d'accepter de nouvelles
-   connexions, laisser les requêtes en cours se terminer. Sans ça, chaque
-   éviction d'un nœud Spot coupe des requêtes au milieu.
-
----
+Ce dernier point compte particulièrement ici : les nœuds Spot sont évincés
+avec 30 secondes de préavis, et sans ce drainage chaque éviction couperait des
+requêtes en vol.
 
 ## Sécurité — état actuel
 

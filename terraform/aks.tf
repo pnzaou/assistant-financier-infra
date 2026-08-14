@@ -37,10 +37,10 @@ resource "azurerm_kubernetes_cluster" "principal" {
     only_critical_addons_enabled = true
 
     os_disk_size_gb = 30
-    # Disque éphémère : plus rapide et surtout GRATUIT (inclus dans la VM),
-    # là où un disque managé est facturé à part. Le contenu est perdu si le
-    # nœud est recréé — sans importance pour un disque système.
-    os_disk_type = "Ephemeral"
+    # Disque managé et non éphémère : les tailles de la génération v7
+    # n'exposent pas de disque temporaire local, ce qu'exige l'OS éphémère.
+    # Facturé à part, mais quelques euros par mois seulement.
+    os_disk_type = "Managed"
 
     upgrade_settings {
       max_surge = "1"
@@ -117,7 +117,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "applicatif" {
   max_count            = var.nb_noeuds_app_max
 
   os_disk_size_gb = 30
-  os_disk_type    = "Ephemeral"
+  os_disk_type    = "Managed"
 
   # `priority = Spot` place automatiquement un taint
   # kubernetes.azure.com/scalesetpriority=spot:NoSchedule sur les nœuds.

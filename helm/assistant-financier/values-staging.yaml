@@ -44,10 +44,12 @@ config:
   # une valeur "/api" produirait "/api/api/v1/...". Dans les deux cas le
   # front n'atteindrait jamais l'API.
   #
-  # À remplacer par le nom d'hôte réel une fois l'Ingress provisionné (son IP
-  # met 5 à 10 minutes à apparaître au premier déploiement).
-  urlApiPubliqueClient: "https://staging.assistant-financier.exemple.com"
-  urlsClient: "https://staging.assistant-financier.exemple.com"
+  # IP publique du contrôleur d'entrée nginx, relevée après création du cluster.
+  # Front et API partagent cette origine : l'Ingress route /api vers l'API et
+  # le reste vers nginx. En HTTP pour l'instant — un nom de domaine et un
+  # certificat TLS seraient la suite logique.
+  urlApiPubliqueClient: "http://4.176.104.163"
+  urlsClient: "http://4.176.104.163"
 
 ingress:
   active: true

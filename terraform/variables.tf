@@ -15,9 +15,9 @@ variable "groupe_ressources" {
 }
 
 variable "region" {
-  description = "Région Azure. francecentral est la plus proche de Dakar ; westeurope est moins chère et a plus de capacité Spot."
+  description = "Région Azure. westeurope refuse les nouveaux abonnements (RequestDisallowedByAzure) ; francecentral est la plus proche de Dakar et accepte les inscriptions."
   type        = string
-  default     = "westeurope"
+  default     = "francecentral"
 }
 
 variable "nom_cluster" {
@@ -38,9 +38,9 @@ variable "version_kubernetes" {
 # système en Spot est refusé à la création. D'où deux pools distincts.
 
 variable "taille_noeud_systeme" {
-  description = "Type de VM du pool système. Standard_B2s = 2 vCPU / 4 Go, la plus petite qui accepte AKS."
+  description = "Type de VM du pool système. Standard_D2ads_v7 = 2 vCPU / 8 Go, la plus petite qui accepte AKS."
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_D2ads_v7"
 }
 
 variable "nb_noeuds_systeme" {
@@ -54,7 +54,7 @@ variable "nb_noeuds_systeme" {
 variable "taille_noeud_app" {
   description = "Type de VM du pool applicatif."
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_D2ads_v7"
 }
 
 variable "nb_noeuds_app_min" {

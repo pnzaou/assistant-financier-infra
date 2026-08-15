@@ -3,10 +3,26 @@ provider "azurerm" {
 
   features {
     resource_group {
-      # `false` : refuser de supprimer un groupe de ressources qui contient
-      # encore des ressources non gérées par Terraform. Sans ce garde-fou,
-      # un `destroy` emporterait aussi ce qui aurait été créé à la main.
-      prevent_deletion_if_contains_resources = true
+      # Ce garde-fou refuse de supprimer un groupe qui contient encore des
+      # ressources inconnues de Terraform. L'intention est bonne — éviter
+      # qu'un `destroy` emporte du travail fait à la main — mais elle ne
+      # s'applique pas ici, et elle a un coût réel.
+      #
+      # AKS crée lui-même des ressources dans ce groupe, notamment la solution
+      # `ContainerInsights(...)` dès qu'on active l'agent de supervision.
+      # Terraform ne la connaît pas, la voit encore présente et refuse alors
+      # de supprimer le groupe :
+      #
+      #   Error: deleting Resource Group "assistant-financier-rg":
+      #     the Resource Group still contains Resources.
+      #
+      # Le `destroy` s'arrête donc à la toute dernière étape, après avoir déjà
+      # tout supprimé — il faut finir à la main. Or rien n'est créé à la main
+      # dans ce groupe : l'état Terraform vit dans un groupe SÉPARÉ
+      # (`assistant-financier-tfstate`), justement pour qu'il survive.
+      #
+      # `false` laisse donc Azure nettoyer les ressources imbriquées.
+      prevent_deletion_if_contains_resources = false
     }
   }
 }

@@ -132,11 +132,11 @@ secrets:
 # ─── Exposition ──────────────────────────────────────────────────
 ingress:
   active: true
-  # `webapprouting.kubernetes.io` = contrôleur nginx géré par AKS, activé par
+  # `webapprouting.kubernetes.azure.com` = contrôleur nginx géré par AKS, activé par
   # le bloc `web_app_routing` du Terraform. Rien à installer soi-même, et
   # ~125 $/mois d'économisés par rapport à Application Gateway (AGIC).
   # Sur GKE ce serait `gce`, avec un contrôleur nginx autogéré `nginx`.
-  className: webapprouting.kubernetes.io
+  className: webapprouting.kubernetes.azure.com
   hote: "" # ex. assistant-financier.exemple.com
   # Annotations additionnelles, propres au contrôleur retenu.
   annotations: {}

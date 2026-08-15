@@ -27,7 +27,7 @@ output "ip_ingress" {
 
 output "classe_ingress" {
   description = "Valeur à mettre dans ingress.className du chart Helm."
-  value       = "webapprouting.kubernetes.io"
+  value       = "webapprouting.kubernetes.azure.com"
 }
 
 output "classe_stockage" {

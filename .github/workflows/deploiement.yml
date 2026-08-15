@@ -22,13 +22,13 @@ on:
         options: [staging, production]
         default: staging
       tag_serveur:
-        description: "Tag de l'image serveur (ex. sha-a1b2c3d). `develop` déploie le dernier build d'intégration."
-        required: true
-        default: develop
+        description: "Tag de l'image serveur (ex. sha-a1b2c3d). Laisser VIDE conserve le tag actuellement déployé."
+        required: false
+        default: ""
       tag_client:
-        description: "Tag de l'image client"
-        required: true
-        default: develop
+        description: "Tag de l'image client. Laisser VIDE conserve le tag actuellement déployé."
+        required: false
+        default: ""
   repository_dispatch:
     types: [deployer]
 
@@ -53,19 +53,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Résolution des paramètres
-        id: params
+      - name: Résolution de l'environnement
+        id: env
         run: |
           # Les deux déclencheurs ne rangent pas leurs entrées au même endroit.
           ENV="${{ github.event.inputs.environnement || github.event.client_payload.environnement || 'staging' }}"
-          TAG_SRV="${{ github.event.inputs.tag_serveur || github.event.client_payload.tag_serveur || 'develop' }}"
-          TAG_CLI="${{ github.event.inputs.tag_client || github.event.client_payload.tag_client || 'develop' }}"
-          {
-            echo "environnement=$ENV"
-            echo "tag_serveur=$TAG_SRV"
-            echo "tag_client=$TAG_CLI"
-          } >> "$GITHUB_OUTPUT"
-          echo "→ $ENV : serveur=$TAG_SRV client=$TAG_CLI"
+          echo "environnement=$ENV" >> "$GITHUB_OUTPUT"
+          echo "→ environnement : $ENV"
 
       # OIDC : GitHub échange le jeton du job contre un jeton Azure éphémère.
       # Aucun secret client stocké — une clé qui fuite donnerait un accès
@@ -89,9 +83,68 @@ jobs:
         with:
           version: v3.16.3
 
+      # Chaque dépôt applicatif ne connaît QUE son propre sha : la CI du serveur
+      # envoie `tag_serveur`, celle du client `tag_client`. Le tag absent ne doit
+      # surtout pas retomber sur une valeur par défaut mouvante comme `develop` :
+      #
+      #   - le manifeste Helm serait inchangé (`:develop` → `:develop`), donc
+      #     AUCUN rollout ne partirait ;
+      #   - et avec `imagePullPolicy: IfNotPresent`, le nœud réutiliserait de
+      #     toute façon l'image `develop` déjà en cache.
+      #
+      # Le composant concerné resterait donc sur l'ancien code, sans la moindre
+      # erreur nulle part. On relit ici le tag RÉELLEMENT déployé et on le
+      # reconduit : « déploie mon nouveau sha, laisse l'autre composant tel quel ».
+      - name: Résolution des tags d'images
+        id: params
+        env:
+          ENVIRONNEMENT: ${{ steps.env.outputs.environnement }}
+          TAG_SRV_DEMANDE: ${{ github.event.inputs.tag_serveur || github.event.client_payload.tag_serveur }}
+          TAG_CLI_DEMANDE: ${{ github.event.inputs.tag_client || github.event.client_payload.tag_client }}
+        run: |
+          # Lit le tag en service pour un composant donné. On sélectionne par
+          # LABEL et non par nom : le nom complet dépend du nom de la release,
+          # le label `component` est stable quoi qu'il arrive.
+          # Silencieux et tolérant : au tout premier déploiement, rien n'existe.
+          tag_en_service() {
+            kubectl get deployment \
+              -n "$ENVIRONNEMENT" \
+              -l "app.kubernetes.io/component=$1" \
+              -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' 2>/dev/null \
+              | sed 's/.*://'
+          }
+
+          TAG_SRV="$TAG_SRV_DEMANDE"
+          if [ -z "$TAG_SRV" ]; then
+            TAG_SRV="$(tag_en_service serveur)"
+            if [ -n "$TAG_SRV" ]; then
+              echo "serveur : non fourni → on reconduit le tag en service ($TAG_SRV)"
+            else
+              TAG_SRV="develop"
+              echo "serveur : non fourni et rien en service → premier déploiement, tag develop"
+            fi
+          fi
+
+          TAG_CLI="$TAG_CLI_DEMANDE"
+          if [ -z "$TAG_CLI" ]; then
+            TAG_CLI="$(tag_en_service client)"
+            if [ -n "$TAG_CLI" ]; then
+              echo "client : non fourni → on reconduit le tag en service ($TAG_CLI)"
+            else
+              TAG_CLI="develop"
+              echo "client : non fourni et rien en service → premier déploiement, tag develop"
+            fi
+          fi
+
+          {
+            echo "tag_serveur=$TAG_SRV"
+            echo "tag_client=$TAG_CLI"
+          } >> "$GITHUB_OUTPUT"
+          echo "→ $ENVIRONNEMENT : serveur=$TAG_SRV client=$TAG_CLI"
+
       - name: Déploiement
         env:
-          ENVIRONNEMENT: ${{ steps.params.outputs.environnement }}
+          ENVIRONNEMENT: ${{ steps.env.outputs.environnement }}
           TAG_SERVEUR: ${{ steps.params.outputs.tag_serveur }}
           TAG_CLIENT: ${{ steps.params.outputs.tag_client }}
         run: |
@@ -115,7 +168,7 @@ jobs:
       - name: État du déploiement
         if: always()
         env:
-          ENVIRONNEMENT: ${{ steps.params.outputs.environnement }}
+          ENVIRONNEMENT: ${{ steps.env.outputs.environnement }}
         run: |
           {
             echo "## Déploiement — $ENVIRONNEMENT"
@@ -131,7 +184,7 @@ jobs:
       - name: Journaux du Job de migration en cas d'échec
         if: failure()
         env:
-          ENVIRONNEMENT: ${{ steps.params.outputs.environnement }}
+          ENVIRONNEMENT: ${{ steps.env.outputs.environnement }}
         run: |
           # Cause d'échec la plus fréquente : une migration Prisma qui casse.
           kubectl logs -n "$ENVIRONNEMENT" \

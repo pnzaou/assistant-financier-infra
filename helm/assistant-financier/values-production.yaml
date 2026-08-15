@@ -53,7 +53,7 @@ config:
 
 ingress:
   active: true
-  className: webapprouting.kubernetes.io
+  className: webapprouting.kubernetes.azure.com
   hote: "assistant-financier.exemple.com"
   tls:
     active: true

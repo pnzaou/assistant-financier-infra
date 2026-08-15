@@ -58,7 +58,7 @@ config:
 ingress:
   active: true
   # Contrôleur nginx géré par AKS (bloc web_app_routing du Terraform).
-  className: webapprouting.kubernetes.io
+  className: webapprouting.kubernetes.azure.com
   hote: ""
   tls:
     active: false

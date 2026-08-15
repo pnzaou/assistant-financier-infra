@@ -31,11 +31,20 @@ serveur:
     pullPolicy: IfNotPresent
   replicas: 2
   port: 5000
+  # `limits.cpu` est OBLIGATOIRE, pas optionnel : le ResourceQuota du namespace
+  # plafonne `limits.cpu`, et Kubernetes refuse alors tout conteneur qui ne le
+  # déclare pas (« must specify limits.cpu »). Un quota qui contraint une
+  # ressource la rend de facto requise sur chaque conteneur du namespace.
+  #
+  # Les plafonds sont calibrés pour que le HPA à pleine échelle tienne dans le
+  # quota : 3 serveurs × 400m + 2 clients × 150m + postgres 400m = 1,9 CPU,
+  # sous les 2 CPU alloués à staging.
   ressources:
     requests:
       cpu: 100m
       memory: 256Mi
     limits:
+      cpu: 400m
       memory: 512Mi
   autoscaling:
     active: true
@@ -55,6 +64,7 @@ client:
       cpu: 25m
       memory: 64Mi
     limits:
+      cpu: 150m
       memory: 128Mi
   autoscaling:
     active: true
@@ -89,6 +99,7 @@ postgres:
       cpu: 100m
       memory: 256Mi
     limits:
+      cpu: 400m
       memory: 512Mi
 
 # ─── Configuration applicative ───────────────────────────────────

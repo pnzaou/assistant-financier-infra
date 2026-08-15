@@ -69,10 +69,18 @@ spec:
                 echo "En attente de PostgreSQL…"
                 sleep 2
               done
+          # `limits` complets : le ResourceQuota du namespace plafonne limits.cpu
+          # et limits.memory, ce qui les rend obligatoires sur CHAQUE conteneur —
+          # conteneurs d'init compris. Sans eux le Job ne crée aucun pod et
+          # retente en boucle jusqu'à `activeDeadlineSeconds`, ce qui ressemble
+          # trompeusement à une migration bloquée.
           resources:
             requests:
               cpu: 10m
               memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
       {{- end }}
 
       containers:
@@ -98,5 +106,6 @@ spec:
               cpu: 100m
               memory: 256Mi
             limits:
+              cpu: 400m
               memory: 512Mi
 {{- end }}

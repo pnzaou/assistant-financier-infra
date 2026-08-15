@@ -110,6 +110,14 @@ donc les 30 jours de l'essai, sans marge pour un oubli.
 Terraform ne peut pas créer le compte de stockage qui contient son propre
 état : il faut l'amorcer à la main.
 
+> **« Une seule fois » tant que le compte de stockage existe.** S'il
+> disparaît, l'état disparaît avec lui : Terraform ne sait plus ce qu'il
+> gère et échoue sur un 404 au premier `init`. C'est déjà arrivé sur ce
+> projet. Refaire cette section suffit à repartir — mais sur une
+> infrastructure encore debout, Terraform la croirait alors inexistante et
+> tenterait de tout recréer. Vérifiez donc l'état réel côté Azure avant
+> tout `apply` : `az resource list --query "length(@)" -o tsv`.
+
 ```bash
 az login
 az account set --subscription "<nom ou id de l'abonnement>"
@@ -215,6 +223,72 @@ helm rollback assistant-financier <révision> -n staging --wait
 
 Attention : Helm restaure les manifests, **pas la base**. Une migration qui a
 supprimé une colonne ne se défait pas toute seule.
+
+## Détruire
+
+```bash
+cd terraform
+terraform destroy
+```
+
+Comptez une dizaine de minutes. La suppression du groupe de ressources est
+la dernière étape et, à elle seule, la plus longue.
+
+**Vérifiez toujours le résultat** — un `destroy` peut s'arrêter en cours de
+route en laissant des ressources facturées :
+
+```bash
+az resource list --query "length(@)" -o tsv     # doit renvoyer 0
+az group list --query "[].name" -o tsv
+```
+
+Doivent subsister uniquement `assistant-financier-tfstate` (l'état) et
+`NetworkWatcherRG` (recréé automatiquement par Azure). Les deux sont vides
+et gratuits.
+
+Si un groupe résiste alors qu'il est vide :
+
+```bash
+az group delete -n assistant-financier-rg --yes
+```
+
+### Ce qui a déjà mal tourné ici
+
+**Le garde-fou sur les ressources imbriquées.** AKS crée lui-même une
+solution `ContainerInsights(...)` que Terraform ne connaît pas ; le provider
+refusait alors de supprimer le groupe, après avoir pourtant déjà tout
+détruit. Réglé en passant `prevent_deletion_if_contains_resources` à `false`
+dans `providers.tf` — voir le commentaire qui y détaille l'arbitrage.
+
+**La perte du compte de stockage de l'état.** Si `terraform destroy` échoue
+sur un 404 du type :
+
+```
+Error: retrieving Storage Account … unexpected status 404 (404 Not Found)
+```
+
+c'est que le backend a disparu : Terraform ne peut plus lire son état, et ne
+sait donc plus ce qu'il gère. Vérifiez avec `az storage account list`. Dans
+ce cas, le plus simple est de **finir le nettoyage à la main** avec
+`az group delete`, puis de refaire l'[amorçage](#amorçage-une-seule-fois)
+avant le prochain `apply` — Terraform repartira d'un état vierge, ce qui est
+correct dès lors que plus rien n'existe côté Azure.
+
+### Remonter l'environnement ensuite
+
+1. Refaire l'amorçage si le compte de stockage n'existe plus.
+2. `terraform init -backend-config=…` puis `terraform apply`.
+3. Relever la nouvelle IP publique de l'Ingress — **elle change à chaque
+   recréation** :
+
+   ```bash
+   kubectl get svc -n app-routing-system nginx \
+     -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+   ```
+
+4. Reporter cette IP dans `helm/assistant-financier/values-staging.yaml`
+   (`urlApiPubliqueClient` **et** `urlsClient`), les deux la contenant en dur.
+5. Relancer le workflow **Déploiement**, en laissant les champs de tags vides.
 
 ## Observabilité
 
